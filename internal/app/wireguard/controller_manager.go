@@ -57,6 +57,18 @@ func (c *ControllerManager) init() error {
 }
 
 func (c *ControllerManager) registerLocalController() error {
+	if c.cfg.Ha.IsOrchestrator() {
+		c.controllers[config.LocalBackendName] = backendInstance{
+			Config: config.BackendBase{
+				Id:          config.LocalBackendName,
+				DisplayName: "HA cluster (applied by the nodes)",
+				Type:        "local",
+			},
+			Implementation: wgcontroller.NewDbOnlyController(),
+		}
+		return nil
+	}
+
 	localController, err := wgcontroller.NewLocalController(c.cfg)
 	if err != nil {
 		return fmt.Errorf("failed to create local WireGuard controller: %w", err)

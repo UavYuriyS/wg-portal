@@ -79,6 +79,8 @@ type Config struct {
 	Web WebConfig `yaml:"web"`
 
 	Webhook WebhookConfig `yaml:"webhook"`
+
+	Ha HaConfig `yaml:"ha"`
 }
 
 // LogStartupValues logs the startup values of the configuration in debug level
@@ -227,6 +229,39 @@ func defaultConfig() *Config {
 	cfg.Webhook.Authentication = getEnvStr("WG_PORTAL_WEBHOOK_AUTHENTICATION", "")
 	cfg.Webhook.Timeout = getEnvDuration("WG_PORTAL_WEBHOOK_TIMEOUT", 10*time.Second)
 
+	hostname, _ := os.Hostname()
+	cfg.Ha = HaConfig{
+		Role:                HaRole(getEnvStr("WG_PORTAL_HA_ROLE", string(HaRoleStandalone))),
+		NodeId:              getEnvStr("WG_PORTAL_HA_NODE_ID", hostname),
+		PublicIp:            getEnvStr("WG_PORTAL_HA_PUBLIC_IP", ""),
+		Priority:            getEnvInt("WG_PORTAL_HA_PRIORITY", 0),
+		DataDir:             getEnvStr("WG_PORTAL_HA_DATA_DIR", "data/ha"),
+		HeartbeatInterval:   getEnvDuration("WG_PORTAL_HA_HEARTBEAT_INTERVAL", 10*time.Second),
+		ReconcileInterval:   getEnvDuration("WG_PORTAL_HA_RECONCILE_INTERVAL", 30*time.Second),
+		ProbeInterval:       getEnvDuration("WG_PORTAL_HA_PROBE_INTERVAL", 30*time.Second),
+		ProbeTimeout:        getEnvDuration("WG_PORTAL_HA_PROBE_TIMEOUT", 15*time.Second),
+		ProbeUrl:            getEnvStr("WG_PORTAL_HA_PROBE_URL", "https://api.ipify.org"),
+		FailThreshold:       getEnvInt("WG_PORTAL_HA_FAIL_THRESHOLD", 3),
+		HeartbeatTimeout:    getEnvDuration("WG_PORTAL_HA_HEARTBEAT_TIMEOUT", 60*time.Second),
+		MinFailoverInterval: getEnvDuration("WG_PORTAL_HA_MIN_FAILOVER_INTERVAL", 5*time.Minute),
+		AutoFailover:        getEnvBool("WG_PORTAL_HA_AUTO_FAILOVER", true),
+		OnPromote:           getEnvStr("WG_PORTAL_HA_ON_PROMOTE", ""),
+		OrchestratorUrl:     getEnvStr("WG_PORTAL_HA_ORCHESTRATOR_URL", ""),
+		JoinToken:           getEnvStr("WG_PORTAL_HA_JOIN_TOKEN", ""),
+		Galera: HaGaleraConfig{
+			ClusterName: getEnvStr("WG_PORTAL_HA_GALERA_CLUSTER_NAME", "wg-portal"),
+			SstUser:     getEnvStr("WG_PORTAL_HA_GALERA_SST_USER", "mariabackup"),
+			SstPassword: getEnvStr("WG_PORTAL_HA_GALERA_SST_PASSWORD", ""),
+		},
+		Dns: HaDnsConfig{RegRu: HaRegRuConfig{
+			ApiUrl:    getEnvStr("WG_PORTAL_HA_DNS_REGRU_API_URL", "https://api.reg.ru/api/regru2/"),
+			Username:  getEnvStr("WG_PORTAL_HA_DNS_REGRU_USERNAME", ""),
+			Password:  getEnvStr("WG_PORTAL_HA_DNS_REGRU_PASSWORD", ""),
+			Zone:      getEnvStr("WG_PORTAL_HA_DNS_REGRU_ZONE", ""),
+			Subdomain: getEnvStr("WG_PORTAL_HA_DNS_REGRU_SUBDOMAIN", ""),
+		}},
+	}
+
 	cfg.Auth.WebAuthn.Enabled = getEnvBool("WG_PORTAL_AUTH_WEBAUTHN_ENABLED", true)
 	cfg.Auth.MinPasswordLength = getEnvInt("WG_PORTAL_AUTH_MIN_PASSWORD_LENGTH", 16)
 	cfg.Auth.HideLoginForm = getEnvBool("WG_PORTAL_AUTH_HIDE_LOGIN_FORM", false)
@@ -267,6 +302,14 @@ func GetConfig() (*Config, error) {
 			return nil, fmt.Errorf("sanitizing of ldap config for %s failed: %w", cfg.Auth.Ldap[i].ProviderName, err)
 		}
 	}
+
+	if cfg.Ha.NodeId == "" { // compose passes unset variables as empty strings
+		cfg.Ha.NodeId, _ = os.Hostname()
+	}
+	if err := cfg.Ha.Validate(); err != nil {
+		return nil, err
+	}
+	applyHaRoleOverrides(cfg)
 
 	handleDeprecatedConfigValues(cfg)
 
@@ -376,5 +419,23 @@ func handleDeprecatedConfigValues(cfg *Config) {
 		slog.Warn("DEPRECATION WARNING: deprecated core config option: create_default_peer_on_creation (WG_PORTAL_CORE_CREATE_DEFAULT_PEER_ON_CREATION)")
 		cfg.Core.CreateDefaultPeerOnUserCreation = true
 		cfg.Core.CreateDefaultPeerOnInterfaceCreation = true
+	}
+}
+
+// applyHaRoleOverrides switches off features that must not run for the configured HA role.
+func applyHaRoleOverrides(cfg *Config) {
+	switch cfg.Ha.Role {
+	case HaRoleOrchestrator:
+		// the orchestrator has no WireGuard interfaces, nodes own the kernel state
+		cfg.Core.ImportExisting = false
+		cfg.Core.RestoreState = false
+		cfg.Statistics.CollectInterfaceData = false
+		cfg.Statistics.CollectPeerData = false
+		cfg.Statistics.UsePingChecks = false
+	case HaRoleNode:
+		// nodes apply the replicated DB via the reconcile loop and must never write interface state on startup
+		cfg.Core.ImportExisting = false
+		cfg.Core.RestoreState = false
+		cfg.Core.AdminUserDisabled = true // users live in the replicated DB, created by the orchestrator
 	}
 }

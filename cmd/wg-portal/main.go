@@ -13,6 +13,7 @@ import (
 
 	"github.com/h44z/wg-portal/internal"
 	"github.com/h44z/wg-portal/internal/adapters"
+	"github.com/h44z/wg-portal/internal/adapters/policyroute"
 	"github.com/h44z/wg-portal/internal/app"
 	"github.com/h44z/wg-portal/internal/app/api/core"
 	backendV0 "github.com/h44z/wg-portal/internal/app/api/v0/backend"
@@ -22,8 +23,10 @@ import (
 	"github.com/h44z/wg-portal/internal/app/audit"
 	"github.com/h44z/wg-portal/internal/app/auth"
 	"github.com/h44z/wg-portal/internal/app/configfile"
+	"github.com/h44z/wg-portal/internal/app/ha"
 	"github.com/h44z/wg-portal/internal/app/mail"
 	"github.com/h44z/wg-portal/internal/app/route"
+	"github.com/h44z/wg-portal/internal/app/routing"
 	"github.com/h44z/wg-portal/internal/app/users"
 	"github.com/h44z/wg-portal/internal/app/webhooks"
 	"github.com/h44z/wg-portal/internal/app/wireguard"
@@ -42,13 +45,36 @@ func main() {
 
 	cfg.LogStartupValues()
 
+	programArgs := app.ParseProgramArgs()
+	if programArgs.HaInit { // runs before the database exists, e.g. as init container of MariaDB
+		internal.AssertNoError(ha.Init(ctx, cfg))
+		slog.Info("HA init complete", "role", cfg.Ha.Role, "dataDir", cfg.Ha.DataDir)
+		return
+	}
+
 	dbEncryptedSerializer := app.NewGormEncryptedStringSerializer(cfg.Database.EncryptionPassphrase)
 	schema.RegisterSerializer("encstr", dbEncryptedSerializer)
 	rawDb, err := adapters.NewDatabase(cfg.Database)
+	// HA parties start before their Galera member is synced (first join can take minutes), so wait for it
+	for deadline := time.Now().Add(cfg.Advanced.StartupTimeout); err != nil && cfg.Ha.Enabled() &&
+		time.Now().Before(deadline); rawDb, err = adapters.NewDatabase(cfg.Database) {
+		slog.Warn("database not available yet, retrying", "error", err)
+		time.Sleep(5 * time.Second)
+	}
 	internal.AssertNoError(err)
 
 	database, err := adapters.NewSqlRepository(rawDb, cfg)
 	internal.AssertNoError(err)
+
+	if programArgs.HaExportCa != "" {
+		internal.AssertNoError(ha.ExportCa(ctx, database, programArgs.HaExportCa))
+		slog.Info("HA cluster CA exported", "dir", programArgs.HaExportCa)
+		return
+	}
+	if programArgs.HaImport != "" {
+		internal.AssertNoError(ha.ImportStandalone(cfg, rawDb, programArgs.HaImport))
+		return
+	}
 
 	wireGuard, err := wireguard.NewControllerManager(cfg)
 	internal.AssertNoError(err)
@@ -60,7 +86,7 @@ func main() {
 	cfgFileSystem, err := adapters.NewFileSystemRepository(cfg.Advanced.ConfigStoragePath)
 	internal.AssertNoError(err)
 
-	shouldExit, err := app.HandleProgramArgs(rawDb)
+	shouldExit, err := app.HandleProgramArgs(rawDb, programArgs)
 	switch {
 	case shouldExit && err == nil:
 		return
@@ -82,7 +108,9 @@ func main() {
 
 	userManager, err := users.NewUserManager(cfg, eventBus, database, database, database)
 	internal.AssertNoError(err)
-	userManager.StartBackgroundJobs(ctx)
+	if !cfg.Ha.IsNode() { // LDAP sync runs on the orchestrator only
+		userManager.StartBackgroundJobs(ctx)
+	}
 
 	authenticator, err := auth.NewAuthenticator(&cfg.Auth, cfg.Web.ExternalUrl, cfg.Web.BasePath, eventBus, userManager)
 	internal.AssertNoError(err)
@@ -93,10 +121,24 @@ func main() {
 
 	wireGuardManager, err := wireguard.NewWireGuardManager(cfg, eventBus, wireGuard, database)
 	internal.AssertNoError(err)
-	wireGuardManager.StartBackgroundJobs(ctx)
+	if !cfg.Ha.IsNode() { // peer expiry runs on the orchestrator only
+		wireGuardManager.StartBackgroundJobs(ctx)
+	}
+
+	routingManager := routing.NewManager(cfg, eventBus, database, wireGuardManager, policyroute.NewController(cfg))
+	wireGuardManager.SetPeerValidator(routingManager.ValidatePeer)
+
+	haManager := ha.NewManager(cfg, database, wireGuardManager, routingManager)
+	haManager.StartBackgroundJobs(ctx)
+	if cfg.Ha.IsNode() {
+		go wireguard.NewHaReconciler(wireGuardManager).Run(ctx, cfg.Ha.ReconcileInterval)
+	}
 
 	statisticsCollector, err := wireguard.NewStatisticsCollector(cfg, eventBus, database, wireGuard, metricsServer)
 	internal.AssertNoError(err)
+	if cfg.Ha.IsNode() { // only the active node writes statistics, standbys would overwrite them with zeros
+		statisticsCollector.SetActiveCheck(haManager.IsActiveNode)
+	}
 	statisticsCollector.StartBackgroundJobs(ctx)
 
 	cfgFileManager, err := configfile.NewConfigFileManager(cfg, eventBus, database, database, cfgFileSystem)
@@ -115,6 +157,10 @@ func main() {
 
 	err = app.Initialize(ctx, cfg, wireGuardManager, userManager)
 	internal.AssertNoError(err)
+
+	if !cfg.Ha.IsOrchestrator() { // the orchestrator never touches the kernel, it only serves the API
+		go routingManager.Run(ctx, cfg.Ha.ReconcileInterval)
+	}
 
 	validatorManager := validator.New()
 
@@ -137,6 +183,8 @@ func main() {
 	apiV0EndpointTest := handlersV0.NewTestEndpoint(apiV0Auth)
 	apiV0EndpointWebsocket := handlersV0.NewWebsocketEndpoint(cfg, apiV0Auth, eventBus, apiV0BackendPeers)
 	apiV0EndpointWebsocket.StartBackgroundJobs(ctx)
+	apiV0EndpointHa := handlersV0.NewHaEndpoint(cfg, apiV0Auth, haManager)
+	apiV0EndpointRouting := handlersV0.NewRoutingEndpoint(apiV0Auth, routingManager)
 
 	apiFrontend := handlersV0.NewRestApi(apiV0Session,
 		apiV0EndpointAuth,
@@ -147,6 +195,8 @@ func main() {
 		apiV0EndpointConfig,
 		apiV0EndpointTest,
 		apiV0EndpointWebsocket,
+		apiV0EndpointHa,
+		apiV0EndpointRouting,
 	)
 
 	// endregion API v0 (SPA frontend)
@@ -166,6 +216,7 @@ func main() {
 	apiV1EndpointProvisioning := handlersV1.NewProvisioningEndpoint(apiV1Auth, validatorManager,
 		apiV1BackendProvisioning)
 	apiV1EndpointMetrics := handlersV1.NewMetricsEndpoint(apiV1Auth, validatorManager, apiV1BackendMetrics)
+	apiV1EndpointHa := handlersV1.NewHaEndpoint(cfg, apiV1Auth, haManager)
 
 	apiV1 := handlersV1.NewRestApi(
 		apiV1EndpointUsers,
@@ -173,6 +224,7 @@ func main() {
 		apiV1EndpointInterfaces,
 		apiV1EndpointProvisioning,
 		apiV1EndpointMetrics,
+		apiV1EndpointHa,
 	)
 
 	// endregion API v1 (User REST API)

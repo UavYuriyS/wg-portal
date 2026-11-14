@@ -21,6 +21,8 @@ type ControllerManager interface {
 type InterfaceAndPeerDatabaseRepo interface {
 	// GetInterface returns the interface with the given identifier.
 	GetInterface(ctx context.Context, id domain.InterfaceIdentifier) (*domain.Interface, error)
+	// GetExitCandidates returns the exit candidates of the interface; any candidate means exit mode.
+	GetExitCandidates(ctx context.Context, id domain.InterfaceIdentifier) ([]domain.ExitCandidate, error)
 }
 
 type EventBus interface {
@@ -142,7 +144,11 @@ func (m Manager) syncRoutes(ctx context.Context, info domain.RoutingTableInfo) e
 		return nil
 	}
 
-	err := rc.SetRoutes(ctx, info)
+	info, err := m.withoutExitRoutes(ctx, info)
+	if err != nil {
+		return err
+	}
+	err = rc.SetRoutes(ctx, info)
 	if err != nil {
 		return fmt.Errorf("failed to set routes for interface %s: %w", info.Interface.Identifier, err)
 	}
@@ -162,9 +168,31 @@ func (m Manager) removeRoutes(ctx context.Context, info domain.RoutingTableInfo)
 		return nil
 	}
 
-	err := rc.RemoveRoutes(ctx, info)
+	info, err := m.withoutExitRoutes(ctx, info)
+	if err != nil {
+		return err
+	}
+	err = rc.RemoveRoutes(ctx, info)
 	if err != nil {
 		return fmt.Errorf("failed to remove routes for interface %s: %w", info.Interface.Identifier, err)
 	}
 	return nil
+}
+
+// withoutExitRoutes strips 0.0.0.0/0 and ::/0 on interfaces in exit mode. Installed wg-quick style, a
+// default route would send the server's own traffic (database replication, SSH replies) through the exit;
+// the routing policy (app/routing) routes only traffic arriving from the interface there instead.
+func (m Manager) withoutExitRoutes(ctx context.Context, info domain.RoutingTableInfo) (
+	domain.RoutingTableInfo,
+	error,
+) {
+	candidates, err := m.db.GetExitCandidates(ctx, info.Interface.Identifier)
+	if err != nil {
+		// unknown exit mode: keep the current kernel routes rather than risk hijacking all server traffic
+		return info, fmt.Errorf("failed to load exit candidates of %s: %w", info.Interface.Identifier, err)
+	}
+	if len(candidates) > 0 {
+		info.AllowedIps = domain.StripDefaultRoutes(info.AllowedIps)
+	}
+	return info, nil
 }

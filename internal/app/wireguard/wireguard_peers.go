@@ -618,7 +618,7 @@ func (m Manager) getFreshPeerIpConfig(ctx context.Context, iface *domain.Interfa
 	return
 }
 
-func (m Manager) validatePeerModifications(ctx context.Context, old, _ *domain.Peer) error {
+func (m Manager) validatePeerModifications(ctx context.Context, old, new *domain.Peer) error {
 	if old != nil && old.IsDynamic {
 		return fmt.Errorf("cannot modify dynamic peer: %w", domain.ErrInvalidData)
 	}
@@ -627,6 +627,10 @@ func (m Manager) validatePeerModifications(ctx context.Context, old, _ *domain.P
 
 	if !currentUser.IsAdmin && !m.cfg.Core.SelfProvisioningAllowed {
 		return domain.ErrNoPermission
+	}
+
+	if m.peerValidator != nil && new != nil {
+		return m.peerValidator(ctx, new)
 	}
 
 	return nil
@@ -646,6 +650,10 @@ func (m Manager) validatePeerCreation(ctx context.Context, _, new *domain.Peer) 
 	_, err := m.db.GetInterface(ctx, new.InterfaceIdentifier)
 	if err != nil {
 		return fmt.Errorf("invalid interface: %w", domain.ErrInvalidData)
+	}
+
+	if m.peerValidator != nil {
+		return m.peerValidator(ctx, new)
 	}
 
 	return nil

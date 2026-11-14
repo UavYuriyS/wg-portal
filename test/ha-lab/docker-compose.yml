@@ -1,0 +1,193 @@
+# HA lab: orchestrator + 2 nodes (Galera), fake ipify/reg.ru, CoreDNS and a Linux client on one docker network.
+# Driven by run.sh (needs REPO_DIR and JOIN_TOKEN), do not start manually.
+name: wgp-ha-lab
+
+x-node-db: &node-db
+  image: mariadb:11.4
+  restart: unless-stopped
+  command: ["--defaults-extra-file=/etc/mysql/ha/galera.cnf"]
+  environment:
+    MARIADB_RANDOM_ROOT_PASSWORD: "1"
+  sysctls:
+    net.ipv4.ip_forward: "1"
+
+x-node-wg: &node-wg
+  image: wg-portal:ha-lab
+  restart: unless-stopped
+  cap_add: [NET_ADMIN]
+  environment:
+    WG_PORTAL_CONFIG: /app/data/ha/config.yml
+    WG_PORTAL_ADVANCED_LOG_LEVEL: debug
+    WG_PORTAL_HA_HEARTBEAT_INTERVAL: 3s
+    WG_PORTAL_HA_RECONCILE_INTERVAL: 5s
+    WG_PORTAL_STATISTICS_DATA_COLLECTION_INTERVAL: 10s
+
+# Stands in for a NAT PostUp rule (the WSL2 kernel has no nf_nat): traffic from the tunnel to
+# 10.11.12.1:8080 leaves the node with the node's own IP, like masqueraded traffic would.
+x-node-egress: &node-egress
+  image: alpine/socat:1.8.0.0
+  restart: unless-stopped
+  command: ["TCP-LISTEN:8080,fork,reuseaddr", "TCP:10.99.0.50:8080"]
+
+x-node-init-env: &node-init-env
+  WG_PORTAL_HA_ROLE: node
+  WG_PORTAL_HA_ORCHESTRATOR_URL: http://10.99.0.10:8888
+  WG_PORTAL_HA_JOIN_TOKEN: ${JOIN_TOKEN:-}
+
+networks:
+  wan:
+    ipam:
+      config: [{subnet: 10.99.0.0/24}]
+
+volumes:
+  orch-mysql:
+  a-mysql:
+  b-mysql:
+
+services:
+  # --- shared fakes ---------------------------------------------------------------------------------
+  fakes:
+    image: golang:1.27-alpine
+    command: ["go", "run", "/fakes/main.go"]
+    environment: {HOSTS_FILE: /dns/hosts}
+    volumes: [./fakes:/fakes:ro, ./run/dns:/dns]
+    networks: {wan: {ipv4_address: 10.99.0.50}}
+
+  coredns:
+    image: coredns/coredns:1.11.3
+    command: ["-conf", "/etc/coredns/Corefile"]
+    volumes: [./Corefile:/etc/coredns/Corefile:ro, ./run/dns:/dns:ro]
+    networks: {wan: {ipv4_address: 10.99.0.53}}
+
+  # --- standalone wg-portal (SQLite) that gets migrated into the cluster -----------------------------
+  standalone:
+    image: wg-portal:ha-lab
+    cap_add: [NET_ADMIN]
+    environment:
+      WG_PORTAL_CORE_ADMIN_PASSWORD: lab-admin-password-123
+      WG_PORTAL_CORE_ADMIN_API_TOKEN: lab-admin-api-token-123456
+      WG_PORTAL_DATABASE_ENCRYPTION_PASSPHRASE: lab-encryption-passphrase # must match the cluster
+      WG_PORTAL_AUTH_WEBAUTHN_ENABLED: "false"
+    volumes: [./run/standalone:/app/data]
+    networks: {wan: {ipv4_address: 10.99.0.20}}
+
+  # --- orchestrator ---------------------------------------------------------------------------------
+  orch-init:
+    image: wg-portal:ha-lab
+    build: {context: "${REPO_DIR:?}"}
+    command: ["-ha-init"]
+    environment:
+      WG_PORTAL_HA_ROLE: orchestrator
+      WG_PORTAL_HA_NODE_ID: orch
+      WG_PORTAL_HA_PUBLIC_IP: 10.99.0.10
+      WG_PORTAL_HA_GALERA_SST_PASSWORD: sstpw
+    volumes: [./run/orch:/app/data]
+    networks: [wan]
+
+  orch-db:
+    image: mariadb:11.4
+    restart: unless-stopped
+    depends_on: {orch-init: {condition: service_completed_successfully}}
+    command: ["--defaults-extra-file=/etc/mysql/ha/galera.cnf"]
+    environment:
+      MARIADB_ROOT_PASSWORD: rootpw
+      MARIADB_DATABASE: wgportal
+      MARIADB_USER: wgportal
+      MARIADB_PASSWORD: dbpw
+      SST_PASSWORD: sstpw
+    volumes:
+      - orch-mysql:/var/lib/mysql
+      - ./run/orch/ha:/etc/mysql/ha:ro
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    networks: {wan: {ipv4_address: 10.99.0.10}}
+
+  orch-wg:
+    image: wg-portal:ha-lab
+    restart: unless-stopped
+    network_mode: service:orch-db
+    depends_on: [orch-db]
+    environment:
+      WG_PORTAL_ADVANCED_LOG_LEVEL: debug
+      WG_PORTAL_CORE_ADMIN_PASSWORD: lab-admin-password-123
+      WG_PORTAL_CORE_ADMIN_API_TOKEN: lab-admin-api-token-123456
+      WG_PORTAL_DATABASE_TYPE: mysql
+      WG_PORTAL_DATABASE_DSN: "wgportal:dbpw@tcp(127.0.0.1:3306)/wgportal?charset=utf8mb4&parseTime=True&loc=Local"
+      WG_PORTAL_DATABASE_ENCRYPTION_PASSPHRASE: lab-encryption-passphrase
+      WG_PORTAL_WEB_EXTERNAL_URL: http://10.99.0.10:8888
+      WG_PORTAL_AUTH_WEBAUTHN_ENABLED: "false" # WebAuthn needs a domain, the lab uses IPs
+      WG_PORTAL_HA_ROLE: orchestrator
+      WG_PORTAL_HA_NODE_ID: orch
+      WG_PORTAL_HA_PUBLIC_IP: 10.99.0.10
+      WG_PORTAL_HA_GALERA_SST_PASSWORD: sstpw
+      WG_PORTAL_HA_PROBE_URL: http://10.11.12.1:8080/ # through the tunnel to the node egress
+      WG_PORTAL_HA_PROBE_INTERVAL: 5s
+      WG_PORTAL_HA_PROBE_TIMEOUT: 4s
+      WG_PORTAL_HA_HEARTBEAT_TIMEOUT: 20s
+      WG_PORTAL_HA_MIN_FAILOVER_INTERVAL: 30s
+      WG_PORTAL_HA_DNS_REGRU_API_URL: http://10.99.0.50:8081/api/regru2/
+      WG_PORTAL_HA_DNS_REGRU_USERNAME: lab
+      WG_PORTAL_HA_DNS_REGRU_PASSWORD: lab
+      WG_PORTAL_HA_DNS_REGRU_ZONE: lab.test
+      WG_PORTAL_HA_DNS_REGRU_SUBDOMAIN: vpn
+    volumes: [./run/orch:/app/data, ./run/standalone:/import:ro]
+
+  # --- node a ---------------------------------------------------------------------------------------
+  a-init:
+    image: wg-portal:ha-lab
+    command: ["-ha-init"]
+    environment:
+      <<: *node-init-env
+      WG_PORTAL_HA_NODE_ID: node-a
+      WG_PORTAL_HA_PUBLIC_IP: 10.99.0.11
+      WG_PORTAL_HA_PRIORITY: "20"
+    volumes: [./run/a:/app/data]
+    networks: [wan]
+  a-db:
+    <<: *node-db
+    depends_on: {a-init: {condition: service_completed_successfully}}
+    volumes: [a-mysql:/var/lib/mysql, ./run/a/ha:/etc/mysql/ha:ro]
+    networks: {wan: {ipv4_address: 10.99.0.11}}
+  a-wg:
+    <<: *node-wg
+    network_mode: service:a-db
+    depends_on: [a-db]
+    volumes: [./run/a:/app/data]
+  a-egress:
+    <<: *node-egress
+    network_mode: service:a-db
+    depends_on: [a-db]
+
+  # --- node b ---------------------------------------------------------------------------------------
+  b-init:
+    image: wg-portal:ha-lab
+    command: ["-ha-init"]
+    environment:
+      <<: *node-init-env
+      WG_PORTAL_HA_NODE_ID: node-b
+      WG_PORTAL_HA_PUBLIC_IP: 10.99.0.12
+      WG_PORTAL_HA_PRIORITY: "10"
+    volumes: [./run/b:/app/data]
+    networks: [wan]
+  b-db:
+    <<: *node-db
+    depends_on: {b-init: {condition: service_completed_successfully}}
+    volumes: [b-mysql:/var/lib/mysql, ./run/b/ha:/etc/mysql/ha:ro]
+    networks: {wan: {ipv4_address: 10.99.0.12}}
+  b-wg:
+    <<: *node-wg
+    network_mode: service:b-db
+    depends_on: [b-db]
+    volumes: [./run/b:/app/data]
+  b-egress:
+    <<: *node-egress
+    network_mode: service:b-db
+    depends_on: [b-db]
+
+  # --- linux client ---------------------------------------------------------------------------------
+  client:
+    image: alpine:3.20
+    command: ["sh", "-c", "apk add -q wireguard-tools-wg wireguard-tools-wg-quick iptables iproute2 curl && touch /ready && sleep infinity"]
+    cap_add: [NET_ADMIN]
+    dns: [10.99.0.53]
+    volumes: ["./clients/wg-reresolve.sh:/usr/local/bin/wg-reresolve.sh:ro", "./run/client:/etc/wireguard"]
+    networks: {wan: {ipv4_address: 10.99.0.100}}

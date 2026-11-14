@@ -1,0 +1,9 @@
+# Install: copy wg-reresolve.sh to /usr/local/bin, this file and the timer to /etc/systemd/system,
+# then: systemctl enable --now wg-reresolve@wg0.timer
+[Unit]
+Description=Re-resolve WireGuard endpoints of %i
+After=wg-quick@%i.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/wg-reresolve.sh %i

@@ -162,6 +162,8 @@ const userDisplayName = computed(() => {
               <RouterLink :to="{ name: 'profile' }" class="dropdown-item"><i class="fas fa-user"></i> {{ $t('menu.profile') }}</RouterLink>
               <RouterLink :to="{ name: 'settings' }" class="dropdown-item" v-if="auth.IsAdmin || !settings.Setting('ApiAdminOnly') || settings.Setting('WebAuthnEnabled')"><i class="fas fa-gears"></i> {{ $t('menu.settings') }}</RouterLink>
               <RouterLink :to="{ name: 'audit' }" class="dropdown-item" v-if="auth.IsAdmin"><i class="fas fa-file-shield"></i> {{ $t('menu.audit') }}</RouterLink>
+              <RouterLink :to="{ name: 'ha' }" class="dropdown-item" v-if="auth.IsAdmin"><i class="fas fa-server"></i> High Availability</RouterLink>
+              <RouterLink :to="{ name: 'routing' }" class="dropdown-item" v-if="auth.IsAdmin"><i class="fas fa-route"></i> Routing</RouterLink>
               <div class="dropdown-divider"></div>
               <a class="dropdown-item" href="#" @click.prevent="auth.Logout"><i class="fas fa-sign-out-alt"></i> {{ $t('menu.logout') }}</a>
             </div>

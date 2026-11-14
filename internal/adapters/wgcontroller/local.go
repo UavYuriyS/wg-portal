@@ -699,6 +699,9 @@ func (c LocalController) setRoutesForFamily(
 			interfaceId, family, err)
 	}
 	for _, rawRoute := range rawRoutes {
+		if domain.IsExitRoutingTable(rawRoute.Table) {
+			continue // owned by the routing policy (adapters/policyroute), not by this interface's table
+		}
 		if rawRoute.Dst == nil { // handle default route
 			var netlinkAddr domain.Cidr
 			if family == netlink.FAMILY_V4 {

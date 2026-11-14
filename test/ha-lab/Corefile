@@ -1,0 +1,11 @@
+lab.test:53 {
+    hosts /dns/hosts {
+        ttl 5
+        reload 1s
+    }
+    log
+}
+
+. {
+    forward . /etc/resolv.conf
+}

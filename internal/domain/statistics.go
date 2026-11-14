@@ -79,7 +79,16 @@ func CalculateTrafficDelta(id string, oldTime, newTime time.Time, oldTx, newTx, 
 	}
 	return TrafficDelta{
 		EntityId:                  id,
-		BytesReceivedPerSecond:    (newRx - oldRx) / timeDiff,
-		BytesTransmittedPerSecond: (newTx - oldTx) / timeDiff,
+		BytesReceivedPerSecond:    counterDelta(oldRx, newRx) / timeDiff,
+		BytesTransmittedPerSecond: counterDelta(oldTx, newTx) / timeDiff,
 	}
+}
+
+// counterDelta treats a decreasing counter as a reset (interface re-created, HA failover) instead of
+// letting the unsigned subtraction wrap around.
+func counterDelta(oldVal, newVal uint64) uint64 {
+	if newVal < oldVal {
+		return newVal
+	}
+	return newVal - oldVal
 }

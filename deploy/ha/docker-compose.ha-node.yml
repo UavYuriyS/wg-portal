@@ -1,0 +1,44 @@
+# HA WireGuard node. Join once with:
+#   WG_PORTAL_HA_ORCHESTRATOR_URL=https://portal.example.com WG_PORTAL_HA_JOIN_TOKEN=<token> docker compose -f docker-compose.ha-node.yml up -d
+# Afterwards the token is no longer needed (./data/ha/joined exists).
+services:
+  ha-init:
+    image: ${WG_PORTAL_IMAGE:-wgportal/wg-portal:v2}
+    command: ["-ha-init"]
+    restart: "no"
+    network_mode: host # hostname is the default node id
+    environment:
+      WG_PORTAL_HA_ROLE: node
+      WG_PORTAL_HA_NODE_ID: ${WG_PORTAL_HA_NODE_ID:-}
+      WG_PORTAL_HA_PUBLIC_IP: ${WG_PORTAL_HA_PUBLIC_IP:-} # empty: detected via ipify
+      WG_PORTAL_HA_PRIORITY: ${WG_PORTAL_HA_PRIORITY:-0}
+      WG_PORTAL_HA_ORCHESTRATOR_URL: ${WG_PORTAL_HA_ORCHESTRATOR_URL:-}
+      WG_PORTAL_HA_JOIN_TOKEN: ${WG_PORTAL_HA_JOIN_TOKEN:-}
+    volumes:
+      - ./data:/app/data
+
+  mariadb:
+    image: mariadb:11.4
+    restart: unless-stopped
+    network_mode: host # Galera: 4567/tcp+udp, 4568/tcp, 4444/tcp must be reachable from all members
+    depends_on:
+      ha-init:
+        condition: service_completed_successfully
+    command: ["--defaults-extra-file=/etc/mysql/ha/galera.cnf"]
+    environment:
+      MARIADB_RANDOM_ROOT_PASSWORD: "1" # replaced by the cluster state on the first sync (SST)
+    volumes:
+      - ./mysql:/var/lib/mysql
+      - ./data/ha:/etc/mysql/ha:ro
+
+  wg-portal:
+    image: ${WG_PORTAL_IMAGE:-wgportal/wg-portal:v2}
+    restart: unless-stopped # also retries until the local Galera member is synced
+    network_mode: host
+    cap_add: [NET_ADMIN]
+    depends_on: [mariadb]
+    environment:
+      WG_PORTAL_CONFIG: /app/data/ha/config.yml # written by ha-init
+    volumes:
+      - /etc/wireguard:/etc/wireguard
+      - ./data:/app/data

@@ -1,0 +1,11 @@
+# Lab settings on top of deploy/ha/docker-compose.ha-orchestrator.yml
+services:
+  wg-portal:
+    environment:
+      WG_PORTAL_CORE_ADMIN_PASSWORD: lab-admin-password-123
+      WG_PORTAL_CORE_ADMIN_API_TOKEN: lab-admin-api-token-123456
+      WG_PORTAL_AUTH_WEBAUTHN_ENABLED: "false" # WebAuthn needs a domain, the lab uses IPs
+      WG_PORTAL_HA_PROBE_URL: http://192.168.77.50:8080/
+      WG_PORTAL_HA_PROBE_INTERVAL: 10s
+      WG_PORTAL_HA_MIN_FAILOVER_INTERVAL: 1m
+      WG_PORTAL_HA_DNS_REGRU_API_URL: http://192.168.77.50:8081/api/regru2/

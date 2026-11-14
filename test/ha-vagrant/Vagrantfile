@@ -1,0 +1,81 @@
+# HA lab on Hyper-V VMs: real kernel NAT, the real deploy/ha compose files, a Linux client with the systemd
+# re-resolve timer and a Windows 11 client with the scheduled re-resolve task. Driven by run.ps1.
+#
+#   192.168.77.50/.53  infra         fake ipify (:8080), fake reg.ru API (:8081), CoreDNS for lab.test (.53)
+#                                    and policy.test; .57-.61 are extra ipify targets for the routing scenario
+#   192.168.77.10      orchestrator  deploy/ha/docker-compose.ha-orchestrator.yml
+#   192.168.77.11/.12  node-a/node-b deploy/ha/docker-compose.ha-node.yml (joined with a join token)
+#   192.168.77.20/.21  exit-a/exit-b exit hosts: wg-quick peers that masquerade out of their lab NIC
+#   192.168.77.100     client-linux  wg-quick + wg-reresolve@wg0.timer
+#   192.168.77.101     client-win    WireGuard for Windows + Install-WgReresolve.ps1 (skip with LAB_WINDOWS=0)
+#
+# Networking: Hyper-V ignores private_network, so each VM gets the "Default Switch" (DHCP, internet, vagrant ssh)
+# plus a second NIC on the internal "wg-ha-lab" switch (setup-hyperv.ps1) with a MAC derived from its lab IP.
+# The provisioning scripts give that NIC its static lab IP.
+# No synced folders (SMB would need admin rights and credentials): run.ps1 packs what the VMs need into
+# .cache/bundle-*.tgz, which is uploaded to /repo (C:\repo). VMs are provisioned in this order; later VMs
+# fetch the join token and their client configs from the orchestrator (http://192.168.77.10:8099/).
+
+unless ENV["VAGRANT_EXPERIMENTAL"].to_s.include?("typed_triggers")
+  abort "Set VAGRANT_EXPERIMENTAL=typed_triggers (run.ps1 does) so the lab NIC can be added before boot"
+end
+
+LAB_SWITCH = "wg-ha-lab"
+lab_mac = ->(ip) { format("00155D4D00%02X", ip.split(".").last.to_i) }
+
+Vagrant.configure("2") do |config|
+  # shortcut: bento has no Hyper-V build of 24.04, generic/ubuntu2204 is the maintained-enough one with Hyper-V
+  config.vm.box = "generic/ubuntu2204"
+  config.vm.synced_folder ".", "/vagrant", disabled: true
+  config.vm.network "public_network", bridge: "Default Switch"
+
+  config.vm.provider "hyperv" do |h|
+    h.linked_clone = true # VMs only store their difference to the box
+    h.memory = 1024
+    h.cpus = 2
+  end
+
+  # name, lab IPs, memory, role provisioner [path, args], windows?
+  vms = [
+    ["infra", %w[192.168.77.50 192.168.77.53 192.168.77.57 192.168.77.58 192.168.77.59 192.168.77.60 192.168.77.61],
+     1024, ["provision/infra.sh", []]],
+    ["orchestrator", ["192.168.77.10"], 1536, ["provision/orchestrator.sh", []]],
+    ["node-a", ["192.168.77.11"], 1536, ["provision/node.sh", ["node-a", "192.168.77.11", "20"]]],
+    ["node-b", ["192.168.77.12"], 1536, ["provision/node.sh", ["node-b", "192.168.77.12", "10"]]],
+    ["exit-a", ["192.168.77.20"], 768, ["provision/exit.sh", ["exit-a"]]],
+    ["exit-b", ["192.168.77.21"], 768, ["provision/exit.sh", ["exit-b"]]],
+    ["client-linux", ["192.168.77.100"], 768, ["provision/client-linux.sh", []]],
+  ]
+  if ENV["LAB_WINDOWS"] != "0"
+    vms << ["client-win", ["192.168.77.101"], 4096, ["provision/client-windows.ps1", []], true]
+  end
+
+  vms.each do |name, ips, memory, (role, role_args), windows|
+    config.vm.define name do |m|
+      m.vm.hostname = name
+      vmname = "wg-ha-lab-#{name}"
+      m.vm.provider("hyperv") do |h|
+        h.vmname = vmname
+        h.memory = memory
+      end
+      m.trigger.before :"VagrantPlugins::HyperV::Action::StartInstance", type: :action do |t|
+        t.info = "attaching #{name} to the #{LAB_SWITCH} switch"
+        t.run = { path: File.join(__dir__, "hyperv-lab-nic.ps1"), args: [vmname, LAB_SWITCH, lab_mac.(ips[0])] }
+      end
+
+      if windows
+        m.vm.box = "gusztavvargadr/windows-11"
+        m.vm.communicator = "winrm"
+        m.vm.guest = :windows
+        m.vm.boot_timeout = 900
+        m.vm.provision "file", source: ".cache/bundle-win.tgz", destination: "C:/Windows/Temp/lab-bundle.tgz"
+        m.vm.provision "shell", path: role, args: [lab_mac.(ips[0]), ips[0]]
+      else
+        m.vm.provision "file", source: ".cache/bundle-linux.tgz", destination: "/tmp/lab-bundle.tgz"
+        m.vm.provision "shell", path: "provision/lab-base.sh", args: [lab_mac.(ips[0])] + ips
+        m.vm.provision "shell", path: "provision/common-linux.sh" unless %w[client-linux exit-a exit-b].include?(name)
+        m.vm.provision "shell", path: role, args: role_args
+      end
+    end
+  end
+end

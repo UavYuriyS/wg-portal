@@ -1,0 +1,4 @@
+# scripts run inside Linux VMs/containers from a Windows checkout
+*.sh text eol=lf
+Corefile text eol=lf
+policy.hosts text eol=lf

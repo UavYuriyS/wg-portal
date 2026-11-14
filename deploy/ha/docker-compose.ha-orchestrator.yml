@@ -1,0 +1,55 @@
+# HA orchestrator: UI, control plane, failover and first Galera member. See docs/documentation/getting-started/high-availability.md
+# Required in .env: PUBLIC_IP, DB_PASSWORD, DB_ROOT_PASSWORD, SST_PASSWORD, ENCRYPTION_PASSPHRASE, EXTERNAL_URL
+# Optional: REGRU_USERNAME, REGRU_PASSWORD, REGRU_ZONE, REGRU_SUBDOMAIN, WG_PORTAL_IMAGE (default wgportal/wg-portal:v2)
+x-wg-portal-env: &wg-portal-env
+  WG_PORTAL_HA_ROLE: orchestrator
+  WG_PORTAL_HA_NODE_ID: ${NODE_ID:-orchestrator}
+  WG_PORTAL_HA_PUBLIC_IP: ${PUBLIC_IP:?}
+  WG_PORTAL_HA_GALERA_SST_PASSWORD: ${SST_PASSWORD:?}
+
+services:
+  ha-init:
+    image: ${WG_PORTAL_IMAGE:-wgportal/wg-portal:v2}
+    command: ["-ha-init"]
+    restart: "no"
+    environment: *wg-portal-env
+    volumes:
+      - ./data:/app/data
+
+  mariadb:
+    image: mariadb:11.4
+    restart: unless-stopped
+    network_mode: host # Galera: 4567/tcp+udp, 4568/tcp, 4444/tcp must be reachable from all nodes
+    depends_on:
+      ha-init:
+        condition: service_completed_successfully
+    command: ["--defaults-extra-file=/etc/mysql/ha/galera.cnf"]
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?}
+      MARIADB_DATABASE: wgportal
+      MARIADB_USER: wgportal
+      MARIADB_PASSWORD: ${DB_PASSWORD:?}
+      SST_PASSWORD: ${SST_PASSWORD:?}
+    volumes:
+      - ./mysql:/var/lib/mysql
+      - ./data/ha:/etc/mysql/ha:ro
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+
+  wg-portal:
+    image: ${WG_PORTAL_IMAGE:-wgportal/wg-portal:v2}
+    restart: unless-stopped # also retries until MariaDB accepts connections
+    network_mode: host
+    depends_on: [mariadb]
+    environment:
+      <<: *wg-portal-env
+      WG_PORTAL_DATABASE_TYPE: mysql
+      WG_PORTAL_DATABASE_DSN: "wgportal:${DB_PASSWORD}@tcp(127.0.0.1:3306)/wgportal?charset=utf8mb4&parseTime=True&loc=Local"
+      WG_PORTAL_DATABASE_ENCRYPTION_PASSPHRASE: ${ENCRYPTION_PASSPHRASE:?}
+      WG_PORTAL_WEB_EXTERNAL_URL: ${EXTERNAL_URL:?}
+      WG_PORTAL_HA_DNS_REGRU_USERNAME: ${REGRU_USERNAME:-}
+      WG_PORTAL_HA_DNS_REGRU_PASSWORD: ${REGRU_PASSWORD:-}
+      WG_PORTAL_HA_DNS_REGRU_ZONE: ${REGRU_ZONE:-}
+      WG_PORTAL_HA_DNS_REGRU_SUBDOMAIN: ${REGRU_SUBDOMAIN:-}
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config

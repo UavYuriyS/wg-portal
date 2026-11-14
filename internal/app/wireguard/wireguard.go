@@ -62,6 +62,14 @@ type Manager struct {
 
 	userLockMap      *sync.Map
 	interfaceLockMap *sync.Map
+
+	peerValidator func(ctx context.Context, peer *domain.Peer) error // optional, see SetPeerValidator
+}
+
+// SetPeerValidator registers an extra check for created and updated peers (the routing policy's exit
+// marker rule). Call it before the manager is used.
+func (m *Manager) SetPeerValidator(fn func(ctx context.Context, peer *domain.Peer) error) {
+	m.peerValidator = fn
 }
 
 func NewWireGuardManager(

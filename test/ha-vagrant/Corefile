@@ -1,0 +1,17 @@
+lab.test:53 {
+    bind 192.168.77.53
+    hosts /dns/hosts {
+        ttl 10
+        reload 1s
+    }
+    log
+}
+
+# static names for the routing scenario (bypass / blackhole by domain), resolved by the nodes' DNS forwarder
+policy.test:53 {
+    bind 192.168.77.53
+    hosts /dns/policy.hosts {
+        ttl 10
+    }
+    log
+}

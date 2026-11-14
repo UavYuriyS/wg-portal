@@ -79,6 +79,8 @@ nav:
           - Helm: documentation/getting-started/helm.md
           - Sources: documentation/getting-started/sources.md
           - Reverse Proxy (HTTPS): documentation/getting-started/reverse-proxy.md
+          - High Availability: documentation/getting-started/high-availability.md
+          - Exit Nodes and Routing Policy: documentation/getting-started/routing-policy.md
       - Configuration:
           - Overview: documentation/configuration/overview.md
           - Examples: documentation/configuration/examples.md

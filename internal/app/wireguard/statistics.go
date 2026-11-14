@@ -58,6 +58,17 @@ type StatisticsCollector struct {
 	ms StatisticsMetricsServer
 
 	peerChangeEvent chan domain.PeerIdentifier
+
+	isActive func() bool // HA: only the active node collects, so standbys do not overwrite its data
+}
+
+// SetActiveCheck makes all collection loops skip their ticks while check returns false.
+func (c *StatisticsCollector) SetActiveCheck(check func() bool) {
+	c.isActive = check
+}
+
+func (c *StatisticsCollector) active() bool {
+	return c.isActive == nil || c.isActive()
 }
 
 // NewStatisticsCollector creates a new statistics collector.
@@ -109,6 +120,9 @@ func (c *StatisticsCollector) collectInterfaceData(ctx context.Context) {
 		case <-ctx.Done():
 			return // program stopped
 		case <-ticker.C:
+			if !c.active() {
+				continue
+			}
 			interfaces, err := c.db.GetAllInterfaces(ctx)
 			if err != nil {
 				slog.Warn("failed to fetch all interfaces for data collection", "error", err)
@@ -174,6 +188,9 @@ func (c *StatisticsCollector) collectPeerData(ctx context.Context) {
 		case <-ctx.Done():
 			return // program stopped
 		case <-ticker.C:
+			if !c.active() {
+				continue
+			}
 			interfaces, err := c.db.GetAllInterfaces(ctx)
 			if err != nil {
 				slog.Warn("failed to fetch all interfaces for peer data collection", "error", err)
@@ -324,6 +341,9 @@ func (c *StatisticsCollector) enqueuePingChecks(ctx context.Context) {
 		case <-ctx.Done():
 			return // program stopped
 		case <-ticker.C:
+			if !c.active() {
+				continue
+			}
 			interfaces, err := c.db.GetAllInterfaces(ctx)
 			if err != nil {
 				slog.Warn("failed to fetch all interfaces for ping checks", "error", err)

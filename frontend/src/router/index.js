@@ -72,6 +72,16 @@ const router = createRouter({
       component: () => import('../views/AuditView.vue')
     },
     {
+      path: '/ha',
+      name: 'ha',
+      component: () => import('../views/HaView.vue')
+    },
+    {
+      path: '/routing',
+      name: 'routing',
+      component: () => import('../views/RoutingView.vue')
+    },
+    {
       path: '/key-generator',
       name: 'key-generator',
       // route level code-splitting

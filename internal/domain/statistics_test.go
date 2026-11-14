@@ -111,3 +111,11 @@ func TestPeerStatus_IsConnected(t *testing.T) {
 		})
 	}
 }
+
+func TestCalculateTrafficDelta_CounterReset(t *testing.T) {
+	now := time.Now()
+	d := CalculateTrafficDelta("p", now.Add(-10*time.Second), now, 1000, 50, 2000, 100)
+	if d.BytesTransmittedPerSecond != 5 || d.BytesReceivedPerSecond != 10 {
+		t.Fatalf("counter reset must not wrap around, got %+v", d)
+	}
+}
