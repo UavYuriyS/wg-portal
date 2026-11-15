@@ -2,6 +2,7 @@ package routing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"slices"
@@ -283,8 +284,8 @@ func (m *Manager) setActive(ctx context.Context, id domain.InterfaceIdentifier, 
 	return nil
 }
 
-// ValidatePeer rejects a default route in the extra allowed IPs of a peer of an exit-mode interface unless the
-// peer is an exit candidate. It is a hook of the WireGuard manager.
+// ValidatePeer rejects adding a default route to the extra allowed IPs of a peer of an exit-mode interface unless
+// the peer is an exit candidate. It is a hook of the WireGuard manager.
 func (m *Manager) ValidatePeer(ctx context.Context, peer *domain.Peer) error {
 	if !domain.HasDefaultRoute(peer.ExtraAllowedIPsStr) {
 		return nil
@@ -295,6 +296,14 @@ func (m *Manager) ValidatePeer(ctx context.Context, peer *domain.Peer) error {
 	}
 	if len(candidates) == 0 ||
 		slices.ContainsFunc(candidates, func(c domain.ExitCandidate) bool { return c.PeerIdentifier == peer.Identifier }) {
+		return nil
+	}
+	// a peer that already had it (from before exit mode, listed as detected) must stay editable
+	existing, err := m.repo.GetPeer(ctx, peer.Identifier)
+	if err != nil && !errors.Is(err, domain.ErrNotFound) {
+		return err
+	}
+	if existing != nil && domain.HasDefaultRoute(existing.ExtraAllowedIPsStr) {
 		return nil
 	}
 	return fmt.Errorf("%w: %s is in exit mode, only exit candidates may have 0.0.0.0/0 or ::/0 in their "+

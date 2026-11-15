@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/h44z/wg-portal/internal/app"
@@ -63,13 +64,25 @@ type Manager struct {
 	userLockMap      *sync.Map
 	interfaceLockMap *sync.Map
 
-	peerValidator func(ctx context.Context, peer *domain.Peer) error // optional, see SetPeerValidator
+	// optional, see SetPeerValidator; a pointer, so the copies bound by the value receivers see it too
+	peerValidator *atomic.Pointer[PeerValidator]
 }
 
-// SetPeerValidator registers an extra check for created and updated peers (the routing policy's exit
-// marker rule). Call it before the manager is used.
-func (m *Manager) SetPeerValidator(fn func(ctx context.Context, peer *domain.Peer) error) {
-	m.peerValidator = fn
+// PeerValidator is an extra check for created and updated peers (the routing policy's exit marker rule).
+type PeerValidator func(ctx context.Context, peer *domain.Peer) error
+
+func (m *Manager) SetPeerValidator(fn PeerValidator) {
+	m.peerValidator.Store(&fn)
+}
+
+func (m Manager) validatePeer(ctx context.Context, peer *domain.Peer) error {
+	if m.peerValidator == nil { // Manager literals in tests
+		return nil
+	}
+	if fn := m.peerValidator.Load(); fn != nil {
+		return (*fn)(ctx, peer)
+	}
+	return nil
 }
 
 func NewWireGuardManager(
@@ -85,6 +98,7 @@ func NewWireGuardManager(
 		db:               db,
 		userLockMap:      &sync.Map{},
 		interfaceLockMap: &sync.Map{},
+		peerValidator:    &atomic.Pointer[PeerValidator]{},
 	}
 
 	m.connectToMessageBus()

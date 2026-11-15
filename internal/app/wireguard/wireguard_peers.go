@@ -629,8 +629,8 @@ func (m Manager) validatePeerModifications(ctx context.Context, old, new *domain
 		return domain.ErrNoPermission
 	}
 
-	if m.peerValidator != nil && new != nil {
-		return m.peerValidator(ctx, new)
+	if new != nil {
+		return m.validatePeer(ctx, new)
 	}
 
 	return nil
@@ -652,11 +652,7 @@ func (m Manager) validatePeerCreation(ctx context.Context, _, new *domain.Peer) 
 		return fmt.Errorf("invalid interface: %w", domain.ErrInvalidData)
 	}
 
-	if m.peerValidator != nil {
-		return m.peerValidator(ctx, new)
-	}
-
-	return nil
+	return m.validatePeer(ctx, new)
 }
 
 func (m Manager) validatePeerDeletion(ctx context.Context, peer *domain.Peer) error {

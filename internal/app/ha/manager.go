@@ -190,12 +190,18 @@ func (m *Manager) probeAndFailover(ctx context.Context) {
 	if !m.cfg.Ha.AutoFailover {
 		return
 	}
+	// decide on fresh state under the promote lock, so a manual promotion during the probes is never reverted
+	m.promoteMu.Lock()
+	defer m.promoteMu.Unlock()
 	if nodes, err = m.repo.GetHaNodes(ctx); err != nil {
+		return
+	}
+	if state, err = m.repo.GetHaState(ctx); err != nil {
 		return
 	}
 	if next, reason := decideFailover(*state, nodes, m.now(), m.cfg.Ha); next != "" {
 		slog.Warn("ha: automatic failover", "from", state.ActiveNodeId, "to", next, "reason", reason)
-		if err := m.Promote(ctx, next, "auto: "+reason); err != nil {
+		if err := m.promoteLocked(ctx, next, "auto: "+reason); err != nil {
 			slog.Error("ha: automatic failover failed", "to", next, "error", err)
 		}
 	}
@@ -384,7 +390,10 @@ func (m *Manager) createProbePeer(ctx context.Context, id domain.InterfaceIdenti
 func (m *Manager) Promote(ctx context.Context, nodeId, actor string) error {
 	m.promoteMu.Lock()
 	defer m.promoteMu.Unlock()
+	return m.promoteLocked(ctx, nodeId, actor)
+}
 
+func (m *Manager) promoteLocked(ctx context.Context, nodeId, actor string) error {
 	node, err := m.repo.GetHaNode(ctx, nodeId)
 	if err != nil {
 		return fmt.Errorf("node %s: %w", nodeId, err)
@@ -547,13 +556,7 @@ func (m *Manager) Register(ctx context.Context, token string, req RegisterReques
 	if req.NodeId == "" || net.ParseIP(req.PublicIp) == nil {
 		return nil, fmt.Errorf("%w: NodeId and a valid PublicIp are required", domain.ErrInvalidData)
 	}
-	if err := m.repo.ConsumeHaJoinToken(ctx, hashToken(token), m.now()); err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return nil, ErrInvalidJoinToken
-		}
-		return nil, err
-	}
-
+	// orchestrator side checks first, so a misconfiguration does not use up the token
 	state, err := m.repo.GetHaState(ctx)
 	if err != nil {
 		return nil, err
@@ -561,13 +564,20 @@ func (m *Manager) Register(ctx context.Context, token string, req RegisterReques
 	if state.CaKeyPem == "" {
 		return nil, errors.New("cluster CA missing, run wg-portal -ha-init on the orchestrator")
 	}
-	cert, key, err := SignMemberCert(state.CaCertPem, state.CaKeyPem, req.NodeId, req.PublicIp)
-	if err != nil {
-		return nil, fmt.Errorf("sign node certificate: %w", err)
-	}
 	dsn, err := localDsn(m.cfg.Database.DSN)
 	if err != nil {
 		return nil, err
+	}
+
+	if err := m.repo.ConsumeHaJoinToken(ctx, hashToken(token), m.now()); err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return nil, ErrInvalidJoinToken
+		}
+		return nil, err
+	}
+	cert, key, err := SignMemberCert(state.CaCertPem, state.CaKeyPem, req.NodeId, req.PublicIp)
+	if err != nil {
+		return nil, fmt.Errorf("sign node certificate: %w", err)
 	}
 
 	err = m.repo.SaveHaNode(ctx, &domain.HaNode{

@@ -286,8 +286,17 @@ func keyOf(r netlink.Rule, fam int) ruleKey {
 	return ruleKey{family: fam, pref: r.Priority, iif: r.IifName, src: src, table: r.Table, mark: r.Mark}
 }
 
-func isOurPref(p int) bool {
-	return p == domain.RulePrefBypass || p == domain.RulePrefProbe || p == domain.RulePrefExit
+// isOurRule matches the shape of the rules desiredRules builds, so foreign rules at our priorities survive.
+func isOurRule(r netlink.Rule) bool {
+	switch r.Priority {
+	case domain.RulePrefBypass:
+		return r.IifName != "" && r.Table == unix.RT_TABLE_MAIN && r.Mark == domain.PolicyBypassMark
+	case domain.RulePrefProbe:
+		return r.IifName != "" && r.Table == unix.RT_TABLE_MAIN && r.Src != nil
+	case domain.RulePrefExit:
+		return r.IifName != "" && domain.IsExitRoutingTable(r.Table)
+	}
+	return false
 }
 
 func (c *Controller) desiredRules(spec domain.PolicySpec, links map[string]netlink.Link) []netlink.Rule {
@@ -341,7 +350,7 @@ func (c *Controller) applyRules(spec domain.PolicySpec, links map[string]netlink
 			return fmt.Errorf("ip rule list: %w", err)
 		}
 		for _, r := range existing {
-			if !isOurPref(r.Priority) {
+			if !isOurRule(r) {
 				continue
 			}
 			k := keyOf(r, f.nl)

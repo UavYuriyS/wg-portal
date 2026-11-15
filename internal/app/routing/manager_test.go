@@ -21,11 +21,14 @@ func init() {
 	schema.RegisterSerializer("encstr", app.NewGormEncryptedStringSerializer("test-passphrase"))
 }
 
-type fakePolicy struct{ specs []domain.PolicySpec }
+type fakePolicy struct {
+	specs []domain.PolicySpec
+	err   error
+}
 
 func (f *fakePolicy) Apply(_ context.Context, s domain.PolicySpec) error {
 	f.specs = append(f.specs, s)
-	return nil
+	return f.err
 }
 func (f *fakePolicy) Verify(context.Context, domain.PolicySpec) error { return nil }
 func (f *fakePolicy) AddDnsEntry(domain.RoutingListKind, netip.Addr, uint32) error {
@@ -39,6 +42,8 @@ func (b *fakeBus) Publish(topic string, args ...any) {
 		b.routeUpdates = append(b.routeUpdates, info.Interface.Identifier)
 	}
 }
+
+func (b *fakeBus) Subscribe(string, any) error { return nil }
 
 // peerSaver mimics the WireGuard manager: validate, then save.
 type peerSaver struct {
@@ -222,6 +227,65 @@ func TestDetectedExitAdoption(t *testing.T) {
 	assert.Equal(t, []domain.InterfaceIdentifier{"wg0"}, bus.routeUpdates) // entered exit mode
 	require.NoError(t, m.Apply(ctx))
 	assert.Len(t, bus.routeUpdates, 1) // unchanged: no second re-sync
+}
+
+func TestExitCandidateLifecycle(t *testing.T) {
+	m, repo, _, _ := newTestManager(t)
+	ctx := domain.SetUserInfo(context.Background(), domain.SystemAdminContextUserInfo())
+	saveIface := func() {
+		require.NoError(t, repo.SaveInterface(ctx, "wg0", func(*domain.Interface) (*domain.Interface, error) {
+			return &domain.Interface{Identifier: "wg0", Type: domain.InterfaceTypeServer, Backend: "local",
+				Addresses: cidrs("10.11.12.1/24")}, nil
+		}))
+	}
+	candidateIds := func() []domain.PeerIdentifier {
+		c, err := repo.GetExitCandidates(ctx, "")
+		require.NoError(t, err)
+		var ids []domain.PeerIdentifier
+		for _, x := range c {
+			ids = append(ids, x.PeerIdentifier)
+		}
+		return ids
+	}
+	saveIface()
+	savePeer(t, repo, "exit-a", "10.11.12.20/32", "")
+	savePeer(t, repo, "legacy", "10.11.12.30/32", "0.0.0.0/0")
+	_, err := m.SetExitCandidates(ctx, "wg0",
+		[]domain.ExitCandidate{{PeerIdentifier: "exit-a", EgressIp: "192.0.2.20"}})
+	require.NoError(t, err)
+
+	// a peer that had the default route before exit mode stays editable
+	require.NoError(t, m.ValidatePeer(ctx, &domain.Peer{Identifier: "legacy", InterfaceIdentifier: "wg0",
+		ExtraAllowedIPsStr: "0.0.0.0/0", DisplayName: "renamed"}))
+
+	// key rotation deletes the peer, saves it under the new key, then publishes the identifier change
+	require.NoError(t, repo.DeletePeer(ctx, "exit-a"))
+	assert.Empty(t, candidateIds()) // the orphan row is ignored
+	savePeer(t, repo, "exit-a2", "10.11.12.20/32", "")
+	m.handlePeerIdentifierUpdated("exit-a", "exit-a2")
+	assert.Equal(t, []domain.PeerIdentifier{"exit-a2"}, candidateIds())
+
+	// a deleted interface takes its candidates along, a re-created one starts without
+	require.NoError(t, repo.DeleteInterface(ctx, "wg0"))
+	saveIface()
+	savePeer(t, repo, "exit-a2", "10.11.12.20/32", "")
+	assert.Empty(t, candidateIds())
+}
+
+func TestApplyFailureKeepsOldMatcher(t *testing.T) {
+	m, _, policy, _ := newTestManager(t)
+	ctx := domain.SetUserInfo(context.Background(), domain.SystemAdminContextUserInfo())
+	_, err := m.SaveList(ctx, "", ListRequest{Name: "ads", Kind: domain.RoutingListBlackhole, Enabled: true,
+		Content: new("ads.example\n")})
+	require.NoError(t, err)
+
+	policy.err = errors.New("no iptables")
+	require.Error(t, m.Apply(ctx))
+	assert.Nil(t, m.matcher.Load()) // its DNS sets may not exist, so nothing is learned yet
+
+	policy.err = nil
+	require.NoError(t, m.Apply(ctx))
+	assert.NotNil(t, m.matcher.Load())
 }
 
 func TestMoveExitMarker(t *testing.T) {

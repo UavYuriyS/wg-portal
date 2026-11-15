@@ -70,6 +70,13 @@ func TestRegister(t *testing.T) {
 	if _, err := m.Register(ctx, "wrong", req); !errors.Is(err, ErrInvalidJoinToken) {
 		t.Fatalf("wrong token: got %v", err)
 	}
+	// an orchestrator misconfiguration must not use up the token
+	dsn := cfg.Database.DSN
+	cfg.Database.DSN = "not a dsn"
+	if _, err := m.Register(ctx, token, req); err == nil || errors.Is(err, ErrInvalidJoinToken) {
+		t.Fatalf("expected dsn error, got %v", err)
+	}
+	cfg.Database.DSN = dsn
 	resp, err := m.Register(ctx, token, req)
 	if err != nil {
 		t.Fatal(err)
@@ -174,8 +181,17 @@ func TestRegRuDns(t *testing.T) {
 		_ = json.Unmarshal([]byte(r.Form.Get("input_data")), &in)
 		calls = append(calls, strings.TrimPrefix(r.URL.Path, "/api/regru2/")+" "+
 			url.Values{"ip": {toStr(in["ipaddr"])}, "content": {toStr(in["content"])}}.Encode())
-		if in["username"] != "user" || in["subdomain"] != "vpn" {
+		listing := strings.HasSuffix(r.URL.Path, "get_resource_records")
+		if in["username"] != "user" || (in["subdomain"] != "vpn" && !listing) {
 			t.Errorf("unexpected input %v", in)
+		}
+		if listing {
+			_, _ = w.Write([]byte(`{"result":"success","answer":{"domains":[{"dname":"example.com",` +
+				`"result":"success",` +
+				`"rrs":[{"subname":"vpn","rectype":"A","content":"203.0.113.1"},` +
+				`{"subname":"vpn","rectype":"A","content":"203.0.113.9"},` +
+				`{"subname":"www","rectype":"A","content":"203.0.113.3"}]}]}}`))
+			return
 		}
 		if strings.HasSuffix(r.URL.Path, "remove_record") && in["content"] == "203.0.113.9" {
 			_, _ = w.Write([]byte(`{"result":"success","answer":{"domains":[{"dname":"example.com","result":"error","error_code":"NO_RECORD"}]}}`))
@@ -187,18 +203,31 @@ func TestRegRuDns(t *testing.T) {
 
 	d := NewRegRuDns(config.HaRegRuConfig{ApiUrl: srv.URL + "/api/regru2/", Username: "user", Password: "pw",
 		Zone: "example.com", Subdomain: "vpn"})
-	err := d.SetA(context.Background(), "203.0.113.2", []string{"203.0.113.1", "203.0.113.2", "203.0.113.9"})
+	err := d.SetA(context.Background(), "203.0.113.2",
+		[]string{"203.0.113.1", "203.0.113.2", "203.0.113.9", "203.0.113.3"})
 	var partial *PartialDnsError
 	if !errors.As(err, &partial) {
 		t.Fatalf("expected partial error, got %v", err)
 	}
 	want := []string{
+		"zone/get_resource_records content=&ip=",
 		"zone/add_alias content=&ip=203.0.113.2",
 		"zone/remove_record content=203.0.113.1&ip=",
 		"zone/remove_record content=203.0.113.9&ip=",
+		"zone/remove_record content=203.0.113.3&ip=",
 	}
 	if strings.Join(calls, "|") != strings.Join(want, "|") {
 		t.Fatalf("calls %v, want %v", calls, want)
+	}
+
+	// fail-back to an IP that still has its record: nothing to add, old records are still removed
+	calls = nil
+	if err := d.SetA(context.Background(), "203.0.113.1", []string{"203.0.113.2"}); err != nil {
+		t.Fatal(err)
+	}
+	want = []string{"zone/get_resource_records content=&ip=", "zone/remove_record content=203.0.113.2&ip="}
+	if strings.Join(calls, "|") != strings.Join(want, "|") {
+		t.Fatalf("calls %v", calls)
 	}
 }
 

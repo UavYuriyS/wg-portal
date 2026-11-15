@@ -166,10 +166,17 @@ func initNode(ctx context.Context, cfg *config.Config) error {
 		caCertFile(dir):                    r.CaCert,
 		filepath.Join(dir, "cert.pem"):     r.Cert,
 		filepath.Join(dir, "key.pem"):      r.Key,
-		filepath.Join(dir, "config.yml"):   string(cfgYaml),
 		filepath.Join(dir, "listen-ports"): joinInts(r.ListenPorts),
 	})
 	if err != nil {
+		return err
+	}
+	// DB password and encryption passphrase: wg-portal only, not the mysql group like the files above
+	cfgFile := filepath.Join(dir, "config.yml")
+	if err := os.WriteFile(cfgFile, cfgYaml, 0o600); err != nil {
+		return fmt.Errorf("write %s: %w", cfgFile, err)
+	}
+	if err := os.Chmod(cfgFile, 0o600); err != nil { // WriteFile keeps the mode of an existing file
 		return err
 	}
 	if err := writeMembers(dir, r.ClusterAddresses); err != nil {

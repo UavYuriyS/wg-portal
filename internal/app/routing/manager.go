@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -13,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/h44z/wg-portal/internal/app"
 	"github.com/h44z/wg-portal/internal/config"
 	"github.com/h44z/wg-portal/internal/domain"
 )
@@ -26,6 +28,7 @@ type Repo interface {
 	GetPeer(ctx context.Context, id domain.PeerIdentifier) (*domain.Peer, error)
 	GetExitCandidates(ctx context.Context, id domain.InterfaceIdentifier) ([]domain.ExitCandidate, error)
 	ReplaceExitCandidates(ctx context.Context, id domain.InterfaceIdentifier, c []domain.ExitCandidate) error
+	RenameExitCandidatePeer(ctx context.Context, oldId, newId domain.PeerIdentifier) error
 	GetRoutingLists(ctx context.Context, withContent bool) ([]domain.RoutingList, error)
 	GetRoutingList(ctx context.Context, id string) (*domain.RoutingList, error)
 	SaveRoutingList(ctx context.Context, list *domain.RoutingList) error
@@ -42,6 +45,7 @@ type PeerUpdater interface {
 
 type EventBus interface {
 	Publish(topic string, args ...any)
+	Subscribe(topic string, fn any) error
 }
 
 // PolicyController applies the routing policy to the kernel (ipsets, iptables, ip rules, exit tables).
@@ -64,8 +68,9 @@ type Manager struct {
 	now    func() time.Time
 	kick   chan struct{}
 
-	matcher atomic.Pointer[domainMatcher]
-	dns     *dnsForwarder
+	matcher     atomic.Pointer[domainMatcher]
+	nextMatcher *domainMatcher // loaded lists, swapped in once their DNS sets exist
+	dns         *dnsForwarder
 
 	// apply loop state
 	listsKey        string
@@ -83,7 +88,18 @@ func NewManager(cfg *config.Config, bus EventBus, repo Repo, peers PeerUpdater, 
 		kick: make(chan struct{}, 1), exitModes: map[domain.InterfaceIdentifier]bool{},
 		warnedDetected: map[domain.PeerIdentifier]bool{}}
 	m.dns = newDnsForwarder(policy, &m.matcher)
+	_ = bus.Subscribe(app.TopicPeerIdentifierUpdated, m.handlePeerIdentifierUpdated)
 	return m
+}
+
+// handlePeerIdentifierUpdated keeps a rotated exit candidate a candidate.
+func (m *Manager) handlePeerIdentifierUpdated(oldId, newId domain.PeerIdentifier) {
+	ctx := domain.SetUserInfo(context.Background(), domain.SystemAdminContextUserInfo())
+	if err := m.repo.RenameExitCandidatePeer(ctx, oldId, newId); err != nil {
+		slog.Error("routing: failed to re-key exit candidate", "old", oldId, "new", newId, "error", err)
+		return
+	}
+	m.Kick()
 }
 
 // Kick triggers an immediate apply in Run (a no-op on the orchestrator, where Run does not execute).
@@ -131,6 +147,33 @@ func (m *Manager) Apply(ctx context.Context) error {
 	}
 	m.resyncRoutesOnExitModeChange(ctx, exitModes)
 
+	h := sha256.New()
+	_, _ = fmt.Fprintf(h, "%s|%+v", m.listsKey, spec.Interfaces)
+	var fingerprint [32]byte
+	copy(fingerprint[:], h.Sum(nil))
+	verifyErr := errors.New("changed")
+	if fingerprint == m.lastFingerprint && len(m.flushDns) == 0 {
+		if verifyErr = m.policy.Verify(ctx, m.lastSpec); verifyErr != nil {
+			slog.Info("routing: kernel state drifted, re-applying", "reason", verifyErr)
+		}
+	}
+	var applyErr error
+	if verifyErr != nil {
+		spec.FlushDns = m.flushDns
+		if applyErr = m.policy.Apply(ctx, spec); applyErr == nil {
+			m.flushDns = nil
+			m.lastFingerprint = fingerprint
+			m.lastSpec = spec
+			slog.Debug("routing: policy applied", "interfaces", len(spec.Interfaces), "block", len(spec.Block),
+				"bypass", len(spec.Bypass))
+		}
+	}
+
+	// the new lists only once their DNS sets exist; name resolution itself must never depend on the policy
+	if applyErr == nil && m.nextMatcher != nil {
+		m.matcher.Store(m.nextMatcher)
+		m.nextMatcher = nil
+	}
 	var upstreams []string
 	if settings.DnsForwarderEnabled {
 		upstreams = splitUpstreams(settings.DnsUpstreams)
@@ -138,28 +181,9 @@ func (m *Manager) Apply(ctx context.Context) error {
 		dnsAddrs = nil
 	}
 	m.dns.Sync(dnsAddrs, upstreams)
-
-	h := sha256.New()
-	_, _ = fmt.Fprintf(h, "%s|%+v", m.listsKey, spec.Interfaces)
-	var fingerprint [32]byte
-	copy(fingerprint[:], h.Sum(nil))
-	if fingerprint == m.lastFingerprint && len(m.flushDns) == 0 {
-		err := m.policy.Verify(ctx, m.lastSpec)
-		if err == nil {
-			return nil
-		}
-		slog.Info("routing: kernel state drifted, re-applying", "reason", err)
+	if applyErr != nil {
+		return fmt.Errorf("apply policy (DNS forwarder still serves, without list matching): %w", applyErr)
 	}
-
-	spec.FlushDns = m.flushDns
-	if err := m.policy.Apply(ctx, spec); err != nil {
-		return fmt.Errorf("apply policy: %w", err)
-	}
-	m.flushDns = nil
-	m.lastFingerprint = fingerprint
-	m.lastSpec = spec
-	slog.Debug("routing: policy applied", "interfaces", len(spec.Interfaces), "block", len(spec.Block),
-		"bypass", len(spec.Bypass))
 	return nil
 }
 
@@ -218,7 +242,7 @@ func (m *Manager) loadLists(ctx context.Context) error {
 	}
 	m.domains = next
 	matcher := newDomainMatcher(next[0], next[1])
-	m.matcher.Store(&matcher)
+	m.nextMatcher = &matcher
 	m.listsKey = key
 	return nil
 }

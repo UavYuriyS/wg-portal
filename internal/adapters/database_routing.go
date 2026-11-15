@@ -11,18 +11,28 @@ import (
 
 // region routing
 
-// GetExitCandidates returns the exit candidates of an interface, or of all interfaces if id is empty.
+// GetExitCandidates returns the exit candidates of an interface, or of all interfaces if id is empty. Rows of
+// deleted peers are skipped: a key rotation deletes the peer before RenameExitCandidatePeer re-keys its row.
 func (r *SqlRepo) GetExitCandidates(ctx context.Context, id domain.InterfaceIdentifier) (
 	[]domain.ExitCandidate,
 	error,
 ) {
 	var candidates []domain.ExitCandidate
-	q := r.db.WithContext(ctx).Order("created_at, peer_identifier")
+	q := r.db.WithContext(ctx).Model(&domain.ExitCandidate{}).Select("exit_candidates.*").
+		Joins("JOIN peers ON peers.identifier = exit_candidates.peer_identifier AND " +
+			"peers.interface_identifier = exit_candidates.interface_identifier").
+		Order("exit_candidates.created_at, exit_candidates.peer_identifier")
 	if id != "" {
-		q = q.Where("interface_identifier = ?", id)
+		q = q.Where("exit_candidates.interface_identifier = ?", id)
 	}
 	err := q.Find(&candidates).Error
 	return candidates, err
+}
+
+// RenameExitCandidatePeer moves the candidate rows of a peer to its new identifier (public key rotation).
+func (r *SqlRepo) RenameExitCandidatePeer(ctx context.Context, oldId, newId domain.PeerIdentifier) error {
+	return r.db.WithContext(ctx).Model(&domain.ExitCandidate{}).Where("peer_identifier = ?", oldId).
+		Update("peer_identifier", newId).Error
 }
 
 // ReplaceExitCandidates replaces all exit candidates of an interface in one transaction.

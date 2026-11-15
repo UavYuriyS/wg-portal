@@ -540,6 +540,12 @@ func (r *SqlRepo) DeleteInterface(ctx context.Context, id domain.InterfaceIdenti
 			return err
 		}
 
+		for _, model := range []any{&domain.ExitCandidate{}, &domain.HaProbePeer{}} {
+			if err := tx.Where("interface_identifier = ?", id).Delete(model).Error; err != nil {
+				return err
+			}
+		}
+
 		err = tx.Select(clause.Associations).Delete(&domain.Interface{Identifier: id}).Error
 		if err != nil {
 			return err

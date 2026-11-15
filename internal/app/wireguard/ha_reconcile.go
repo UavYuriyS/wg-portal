@@ -3,8 +3,12 @@ package wireguard
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/h44z/wg-portal/internal/app"
@@ -18,11 +22,39 @@ type HaReconciler struct {
 	m *Manager
 
 	lastFingerprint [32]byte
-	managed         map[domain.InterfaceIdentifier]domain.Interface // interfaces applied by this process
+	// interfaces applied by this node, persisted in stateFile so ones deleted while it was down still go
+	managed   map[domain.InterfaceIdentifier]domain.Interface
+	stateFile string
 }
 
 func NewHaReconciler(m *Manager) *HaReconciler {
-	return &HaReconciler{m: m, managed: map[domain.InterfaceIdentifier]domain.Interface{}}
+	r := &HaReconciler{m: m, managed: map[domain.InterfaceIdentifier]domain.Interface{},
+		stateFile: filepath.Join(m.cfg.Ha.DataDir, "reconciled-interfaces.json")}
+	raw, err := os.ReadFile(r.stateFile)
+	if err == nil {
+		err = json.Unmarshal(raw, &r.managed)
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		slog.Warn("ha reconcile: cannot read managed interfaces, deleted ones may stay in the kernel",
+			"file", r.stateFile, "error", err)
+	}
+	return r
+}
+
+// saveManaged persists the managed interfaces without their private keys.
+func (r *HaReconciler) saveManaged() {
+	stripped := make(map[domain.InterfaceIdentifier]domain.Interface, len(r.managed))
+	for id, iface := range r.managed {
+		iface.KeyPair = domain.KeyPair{}
+		stripped[id] = iface
+	}
+	raw, err := json.Marshal(stripped)
+	if err == nil {
+		err = os.WriteFile(r.stateFile, raw, 0o600)
+	}
+	if err != nil {
+		slog.Warn("ha reconcile: cannot save managed interfaces", "file", r.stateFile, "error", err)
+	}
 }
 
 // Run reconciles immediately and then every interval until ctx is cancelled.
@@ -85,6 +117,7 @@ func (r *HaReconciler) Reconcile(ctx context.Context, force bool) error {
 			}
 		}
 	}
+	r.saveManaged()
 	if len(errs) > 0 {
 		return fmt.Errorf("%d interface(s) failed, first: %w", len(errs), errs[0])
 	}
