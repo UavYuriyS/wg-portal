@@ -1,5 +1,5 @@
 # HA orchestrator: UI, control plane, failover and first Galera member. See docs/documentation/getting-started/high-availability.md
-# Required in .env: PUBLIC_IP, DB_PASSWORD, DB_ROOT_PASSWORD, SST_PASSWORD, ENCRYPTION_PASSPHRASE, EXTERNAL_URL
+# Required in .env: PUBLIC_IP, DB_PASSWORD, DB_ROOT_PASSWORD, SST_PASSWORD, EXTERNAL_URL, ENCRYPTION_PASSPHRASE (may be empty: must match the imported install)
 # Optional: REGRU_USERNAME, REGRU_PASSWORD, REGRU_ZONE, REGRU_SUBDOMAIN, WG_PORTAL_IMAGE (default wgportal/wg-portal:v2)
 x-wg-portal-env: &wg-portal-env
   WG_PORTAL_HA_ROLE: orchestrator
@@ -44,7 +44,7 @@ services:
       <<: *wg-portal-env
       WG_PORTAL_DATABASE_TYPE: mysql
       WG_PORTAL_DATABASE_DSN: "wgportal:${DB_PASSWORD}@tcp(127.0.0.1:3306)/wgportal?charset=utf8mb4&parseTime=True&loc=Local"
-      WG_PORTAL_DATABASE_ENCRYPTION_PASSPHRASE: ${ENCRYPTION_PASSPHRASE:?}
+      WG_PORTAL_DATABASE_ENCRYPTION_PASSPHRASE: ${ENCRYPTION_PASSPHRASE?}
       WG_PORTAL_WEB_EXTERNAL_URL: ${EXTERNAL_URL:?}
       WG_PORTAL_HA_DNS_REGRU_USERNAME: ${REGRU_USERNAME:-}
       WG_PORTAL_HA_DNS_REGRU_PASSWORD: ${REGRU_PASSWORD:-}
