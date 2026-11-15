@@ -70,11 +70,19 @@ REGRU_USERNAME=...
 REGRU_PASSWORD=...
 REGRU_ZONE=example.com
 REGRU_SUBDOMAIN=vpn
+UI_BIND=127.0.0.1:8888                # optional, this is the default
 ```
 
 Then run `docker compose -f docker-compose.ha-orchestrator.yml up -d`. On its first start, `ha-init` creates
 the cluster CA in `./data/ha` and MariaDB bootstraps a new cluster. Put the UI behind HTTPS
-(see [Reverse Proxy](reverse-proxy.md)).
+(see [Reverse Proxy](reverse-proxy.md)): nodes join through it.
+
+The orchestrator does not use host networking. Only the Galera ports are published on all addresses. The UI
+is published on `UI_BIND`, by default on the loopback address only. If the reverse proxy runs in a container
+on the same host, either set `UI_BIND` to the Docker bridge address (for example `172.17.0.1:8888`), or attach
+the `wg-portal` service to the proxy's network and proxy to `wg-portal:8888`. Ports that Docker publishes
+bypass host firewalls such as ufw; to restrict the Galera ports to the node addresses, use the `DOCKER-USER`
+chain.
 
 !!! warning
     Back up `./data/ha/ca.pem` and `./data/ha/ca-key.pem`. A copy is also stored, encrypted, in the database
@@ -151,8 +159,9 @@ stay the same, so clients keep their configs. They only need to reach the server
    endpoint they were created with. If it is already the DNS name, clients need no change.
 2. **Lower the TTL.** A day before the migration, set the TTL of the VPN record to 60s.
 3. **Prepare the orchestrator.** Set up the orchestrator as above, but **do not start wg-portal yet**.
-    - Use the `encryption_passphrase` of the old installation, or leave it empty if it never had one. Keys
-      are copied encrypted.
+    - Use the `encryption_passphrase` of the old installation. If it never had one, keep
+      `ENCRYPTION_PASSPHRASE=` empty, or set a new passphrase to encrypt the keys from now on: the import
+      encrypts all keys and API tokens that the old installation stored in plain text.
     - Start only the database: `docker compose -f docker-compose.ha-orchestrator.yml up -d mariadb`.
 4. **Stop the old wg-portal and import its database.** WireGuard keeps running in the kernel, so users stay
    connected while wg-portal is stopped.
@@ -164,10 +173,14 @@ stay the same, so clients keep their configs. They only need to reach the server
       orchestrator's first start.
 5. **Start the orchestrator:** `docker compose -f docker-compose.ha-orchestrator.yml up -d`. Users, including
    the admin account and its password, are the ones from the old installation.
+   Once the UI shows the interfaces and peers, **delete `./data/sqlite.db`** from the orchestrator. The import
+   never changes the source file: if the old installation had no passphrase, it holds every private key in
+   plain text, and `./data/` is the directory you back up for the cluster CA.
 6. **Join the nodes.** They come up with the old server key, port and peers. The first healthy node becomes
    active and the VPN DNS record is pointed at it.
-7. **Reuse the old server, if you want.** Stop its old wg-portal and keep `sqlite.db` as a backup. Then join
-   it as a node with the highest priority. It takes over the existing interface in place.
+7. **Reuse the old server, if you want.** Stop its old wg-portal and move `sqlite.db` off the server into a
+   protected backup, or delete it (it may hold all keys in plain text). Then join it as a node with the
+   highest priority. It takes over the existing interface in place.
 
 !!! note
     If the portal URL changes, passkeys (WebAuthn) registered under the old domain stop working. Users can

@@ -1,6 +1,7 @@
 # HA orchestrator: UI, control plane, failover and first Galera member. See docs/documentation/getting-started/high-availability.md
 # Required in .env: PUBLIC_IP, DB_PASSWORD, DB_ROOT_PASSWORD, SST_PASSWORD, EXTERNAL_URL, ENCRYPTION_PASSPHRASE (may be empty: must match the imported install)
-# Optional: REGRU_USERNAME, REGRU_PASSWORD, REGRU_ZONE, REGRU_SUBDOMAIN, WG_PORTAL_IMAGE (default wgportal/wg-portal:v2)
+# Optional: REGRU_USERNAME, REGRU_PASSWORD, REGRU_ZONE, REGRU_SUBDOMAIN, WG_PORTAL_IMAGE (default wgportal/wg-portal:v2),
+#   UI_BIND (default 127.0.0.1:8888: the UI is only reachable from this host, put the HTTPS reverse proxy in front)
 x-wg-portal-env: &wg-portal-env
   WG_PORTAL_HA_ROLE: orchestrator
   WG_PORTAL_HA_NODE_ID: ${NODE_ID:-orchestrator}
@@ -19,11 +20,16 @@ services:
   mariadb:
     image: mariadb:11.4
     restart: unless-stopped
-    network_mode: host # Galera: 4567/tcp+udp, 4568/tcp, 4444/tcp must be reachable from all nodes
+    ports: # Galera, reachable from all nodes. Docker-published ports bypass ufw: restrict them in DOCKER-USER if needed
+      - "4567:4567/tcp"
+      - "4567:4567/udp"
+      - "4568:4568/tcp"
+      - "4444:4444/tcp"
     depends_on:
       ha-init:
         condition: service_completed_successfully
-    command: ["--defaults-extra-file=/etc/mysql/ha/galera.cnf"]
+    # 3306 listens inside the compose network only (not published), so wg-portal can reach it
+    command: ["--defaults-extra-file=/etc/mysql/ha/galera.cnf", "--bind-address=0.0.0.0"]
     environment:
       MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?}
       MARIADB_DATABASE: wgportal
@@ -38,12 +44,13 @@ services:
   wg-portal:
     image: ${WG_PORTAL_IMAGE:-wgportal/wg-portal:v2}
     restart: unless-stopped # also retries until MariaDB accepts connections
-    network_mode: host
+    ports:
+      - "${UI_BIND:-127.0.0.1:8888}:8888"
     depends_on: [mariadb]
     environment:
       <<: *wg-portal-env
       WG_PORTAL_DATABASE_TYPE: mysql
-      WG_PORTAL_DATABASE_DSN: "wgportal:${DB_PASSWORD}@tcp(127.0.0.1:3306)/wgportal?charset=utf8mb4&parseTime=True&loc=Local"
+      WG_PORTAL_DATABASE_DSN: "wgportal:${DB_PASSWORD}@tcp(mariadb:3306)/wgportal?charset=utf8mb4&parseTime=True&loc=Local"
       WG_PORTAL_DATABASE_ENCRYPTION_PASSPHRASE: ${ENCRYPTION_PASSPHRASE?}
       WG_PORTAL_WEB_EXTERNAL_URL: ${EXTERNAL_URL:?}
       WG_PORTAL_HA_DNS_REGRU_USERNAME: ${REGRU_USERNAME:-}

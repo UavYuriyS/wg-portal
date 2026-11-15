@@ -79,6 +79,27 @@ func main() {
 			reply(w, dname, "success", "")
 		}
 	}
+	http.HandleFunc("/api/regru2/zone/get_resource_records", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		var in regRuInput
+		if json.Unmarshal([]byte(r.Form.Get("input_data")), &in) != nil || len(in.Domains) != 1 {
+			_ = json.NewEncoder(w).Encode(map[string]string{"result": "error", "error_code": "PARAMETER_INCORRECT"})
+			return
+		}
+		dname := in.Domains[0].Dname
+		mu.Lock()
+		defer mu.Unlock()
+		rrs := []map[string]string{}
+		for fqdn, ips := range records {
+			if sub, ok := strings.CutSuffix(fqdn, "."+dname); ok {
+				for ip := range ips {
+					rrs = append(rrs, map[string]string{"subname": sub, "rectype": "A", "content": ip})
+				}
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": "success", "answer": map[string]any{
+			"domains": []map[string]any{{"dname": dname, "result": "success", "rrs": rrs}}}})
+	})
 	http.HandleFunc("/api/regru2/zone/add_alias", handler(true))
 	http.HandleFunc("/api/regru2/zone/remove_record", handler(false))
 	write()

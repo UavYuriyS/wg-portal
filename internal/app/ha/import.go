@@ -51,6 +51,8 @@ func ImportStandalone(cfg *config.Config, dst *gorm.DB, sqliteFile string) error
 		return err
 	}
 	slog.Info("standalone database imported", "source", sqliteFile, "rows", adapters.FormatImportCounts(counts))
+	slog.Warn("delete the source file once the import is verified: it is left unchanged and may hold keys in plain text",
+		"source", sqliteFile)
 	return nil
 }
 

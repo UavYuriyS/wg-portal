@@ -112,6 +112,10 @@ func TestRegister(t *testing.T) {
 	if strings.Fields(string(members))[1] != "203.0.113.10" {
 		t.Fatalf("members file not updated: %q", members)
 	}
+	if cnf, _ := os.ReadFile(filepath.Join(cfg.Ha.DataDir, "galera.cnf")); !strings.Contains(string(cnf),
+		"wsrep_cluster_address=gcomm://203.0.113.10\n") {
+		t.Fatalf("galera.cnf not updated: %q", cnf)
+	}
 
 	// CA key survives the encrypted round trip
 	state, _ := repo.GetHaState(ctx)

@@ -54,6 +54,14 @@ func TestImportStandalone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// an install without passphrase stored these in plain text; the peer's private key stays encrypted
+	plainCols := map[string]string{"interfaces": "private_key", "peers": "preshared_key"}
+	if err := srcDb.Exec("UPDATE interfaces SET private_key = ?", ifaceKeys.PrivateKey).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := srcDb.Exec("UPDATE peers SET preshared_key = ?", "psk-value").Error; err != nil {
+		t.Fatal(err)
+	}
 	if sql, err := srcDb.DB(); err == nil {
 		_ = sql.Close() // like a stopped standalone instance
 	}
@@ -71,6 +79,13 @@ func TestImportStandalone(t *testing.T) {
 
 	if err := ImportStandalone(cfg, dstDb, srcFile); err != nil {
 		t.Fatal(err)
+	}
+
+	for table, col := range plainCols { // re-encrypted with the target's passphrase
+		var raw string
+		if err := dstDb.Table(table).Select(col).Scan(&raw).Error; err != nil || !strings.HasPrefix(raw, "WG_ENC_") {
+			t.Fatalf("%s.%s not encrypted after import: %q %v", table, col, raw, err)
+		}
 	}
 
 	iface, peers, err := dst.GetInterfaceAndPeers(ctx, "wg0")

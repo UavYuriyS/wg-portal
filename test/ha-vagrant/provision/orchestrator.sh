@@ -24,6 +24,7 @@ REGRU_USERNAME=lab
 REGRU_PASSWORD=lab
 REGRU_ZONE=lab.test
 REGRU_SUBDOMAIN=vpn
+UI_BIND=0.0.0.0:8888
 EOF
 docker compose -f docker-compose.ha-orchestrator.yml -f orchestrator.override.yml up -d
 

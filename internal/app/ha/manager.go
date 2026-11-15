@@ -597,9 +597,12 @@ func (m *Manager) Register(ctx context.Context, token string, req RegisterReques
 	for _, n := range nodes {
 		members = append(members, n.PublicIp)
 	}
-	// the orchestrator's galera.cnf is rendered from this file on its next start
+	// galera.cnf too: a plain container restart or host reboot does not re-run ha-init, and the bootstrap
+	// config (no members) would then refuse to start
 	if err := writeMembers(m.cfg.Ha.DataDir, members); err != nil {
 		slog.Warn("ha: failed to update members file", "error", err)
+	} else if err := writeGaleraConfig(m.cfg, members); err != nil {
+		slog.Warn("ha: failed to update galera.cnf", "error", err)
 	}
 
 	var ports []int

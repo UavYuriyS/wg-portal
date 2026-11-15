@@ -41,3 +41,6 @@ venv/
 internal/app/api/core/frontend-dist
 # mkdocs output directory
 site/
+
+# local deployment secrets
+.env

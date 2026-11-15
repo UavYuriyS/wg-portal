@@ -96,7 +96,7 @@ if ($Rebuild -or -not (Test-Path "$here\.cache\wg-portal.tar.gz")) {
     wsl -e bash -lc "docker build -q -t wg-portal:ha-lab '$wslRepo' && docker save wg-portal:ha-lab | gzip > '$wslRepo/test/ha-vagrant/.cache/wg-portal.tar.gz'"
     if ($LASTEXITCODE) { Fail 'image build failed' }
 }
-if (-not (Test-Path "$here\.cache\fakes")) {
+if ($Rebuild -or -not (Test-Path "$here\.cache\fakes")) {
     $env:GOOS = 'linux'; $env:GOARCH = 'amd64'; $env:CGO_ENABLED = '0'
     go build -o "$here\.cache\fakes" "$repo\test\ha-lab\fakes\main.go"
     Remove-Item Env:GOOS, Env:GOARCH, Env:CGO_ENABLED
@@ -143,6 +143,12 @@ foreach ($p in (Invoke-RestMethod "$api/peer/by-interface/wg0" -Headers $auth)) 
 }
 if ($exitId.Count -ne 2) { Fail 'peers exit-a/exit-b missing (orchestrator provisioning)' }
 Ok 'routing reset'
+
+Log 'orchestrator MariaDB restart (like a host reboot: no ha-init): rejoins the cluster through the port mapping'
+$galera = 'sudo docker exec wg-portal-mariadb-1 mariadb -uroot -plab-root-password -N -e "show status like ''wsrep_cluster_size''" 2>/dev/null | cut -f2'
+Vssh orchestrator 'sudo docker restart wg-portal-mariadb-1' | Out-Null
+Wait-For 120 'orchestrator back in a 3-member cluster' { (Vssh orchestrator $galera) -eq '3' }
+Wait-For 60 'orchestrator API answers again' { try { [bool](Active) } catch { $false } }
 
 Log 'bootstrap: highest priority node active, DNS points at it, clients connect through it'
 # a repeated run starts from a clean state: no block, node-a active, client tunnels freshly resolved
@@ -252,7 +258,8 @@ Log 'unblock and promote node-a back; tunnels restarted for the next run'
 Vssh node-a $unblock | Out-Null
 Invoke-RestMethod -Method Post "$api/ha/promote/node-a" -Headers $auth | Out-Null
 Wait-For 30 'vpn.lab.test -> 192.168.77.11' { (Dns) -eq '192.168.77.11' }
-foreach ($vm in 'client-linux', 'exit-a', 'exit-b') { Vssh $vm 'sudo systemctl restart wg-quick@wg0' | Out-Null }
+# flush first: resolved may still cache node-b (TTL 10s), and a standby still accepts handshakes
+foreach ($vm in 'client-linux', 'exit-a', 'exit-b') { Vssh $vm 'sudo resolvectl flush-caches; sudo systemctl restart wg-quick@wg0' | Out-Null }
 Vssh client-linux $policyDns | Out-Null
 Wait-For 90 'linux client egress through exit-a' { (Egress-Linux) -eq '192.168.77.20' }
 
