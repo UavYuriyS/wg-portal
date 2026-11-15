@@ -6,7 +6,7 @@ token=$(curl -sf http://192.168.77.10:8099/join-token)
 
 mkdir -p /opt/wg-portal
 cd /opt/wg-portal
-cp /repo/deploy/ha/docker-compose.ha-node.yml .
+cp /repo/deploy/ha/docker-compose.ha-node.yml /repo/test/ha-vagrant/node.override.yml .
 cat > .env <<EOF
 WG_PORTAL_IMAGE=wg-portal:ha-lab
 WG_PORTAL_HA_NODE_ID=$1
@@ -15,7 +15,7 @@ WG_PORTAL_HA_PRIORITY=$3
 WG_PORTAL_HA_ORCHESTRATOR_URL=http://192.168.77.10:8888
 WG_PORTAL_HA_JOIN_TOKEN=$token
 EOF
-docker compose -f docker-compose.ha-node.yml up -d
+docker compose -f docker-compose.ha-node.yml -f node.override.yml up -d
 
 # joined when the replicated interface is up with its peers (2 clients + the probe peer)
 for _ in $(seq 100); do

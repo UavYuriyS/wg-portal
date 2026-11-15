@@ -33,7 +33,17 @@ func main() {
 
 	hostsFile := os.Getenv("HOSTS_FILE")
 	var mu sync.Mutex
-	records := map[string]map[string]bool{} // fqdn -> set of ips
+	records := map[string]map[string]bool{}             // fqdn -> set of ips
+	if raw, err := os.ReadFile(hostsFile); err == nil { // keep the records across a restart (lab redeploy)
+		for _, line := range strings.Split(string(raw), "\n") {
+			if f := strings.Fields(line); len(f) == 2 {
+				if records[f[1]] == nil {
+					records[f[1]] = map[string]bool{}
+				}
+				records[f[1]][f[0]] = true
+			}
+		}
+	}
 	write := func() {
 		var lines []string
 		for fqdn, ips := range records {

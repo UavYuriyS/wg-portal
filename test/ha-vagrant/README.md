@@ -47,7 +47,7 @@ Then, as your normal user:
 .\test\ha-vagrant\run.ps1               # build, vagrant up, run the failover scenario
 .\test\ha-vagrant\run.ps1 -NoWindows    # without the Windows VM
 .\test\ha-vagrant\run.ps1 -SkipHa       # bootstrap and the routing scenario only
-.\test\ha-vagrant\run.ps1 -Rebuild      # rebuild the image after code changes
+.\test\ha-vagrant\run.ps1 -Rebuild      # after code changes: rebuild and redeploy into the running VMs
 .\test\ha-vagrant\run.ps1 -Destroy      # remove the VMs (setup-hyperv.ps1 -Remove deletes the switch)
 ```
 
@@ -59,7 +59,7 @@ For manual `vagrant` commands, set the same environment variables that `run.ps1`
 
 The trigger that attaches the lab NIC needs the last one.
 
-After `-Rebuild`, push the new image to the running VMs with `vagrant provision`.
+`-Rebuild` on running VMs redeploys the new image, the compose files and the fakes in about 2 minutes (orchestrator first, then one node at a time). Changes to `provision/*.sh`, the `.env` files or the Vagrantfile need a fresh lab: `-Destroy`, then `-Rebuild`. The lab nodes reconcile every 5s (`node.override.yml`).
 
 The admin login is `admin@wgportal.local` / `lab-admin-password-123`.
 

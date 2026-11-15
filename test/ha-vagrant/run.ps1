@@ -4,7 +4,8 @@ brings the VMs up and runs the failover scenario against real Linux and Windows 
 (exit nodes, bypass and blackhole lists) against the Linux client.
 
   .\run.ps1               build if needed, vagrant up, run the scenarios (VMs keep running)
-  .\run.ps1 -Rebuild      rebuild the wg-portal image first (after code changes; then re-provision)
+  .\run.ps1 -Rebuild      rebuild the wg-portal image and fakes (after code changes); existing VMs get them redeployed
+                          in ~2 min. Changes to provision/*.sh or the Vagrantfile need -Destroy first
   .\run.ps1 -NoWindows    skip the Windows client VM
   .\run.ps1 -SkipHa       skip the HA failover scenario, run only bootstrap and routing
   .\run.ps1 -Destroy      remove all lab VMs
@@ -37,11 +38,16 @@ function Wait-For($timeoutSec, $what, [scriptblock]$check) {
     Ok "$what ($([int]$sw.Elapsed.TotalSeconds)s)"
 }
 # plain ssh to the lab IP: fast, and BatchMode/ConnectTimeout make a broken check fail instead of hang
-$labIp = @{ 'orchestrator' = '192.168.77.10'; 'node-a' = '192.168.77.11'; 'client-linux' = '192.168.77.100'
-    'exit-a' = '192.168.77.20'; 'exit-b' = '192.168.77.21' }
+$labIp = @{ 'infra' = '192.168.77.50'; 'orchestrator' = '192.168.77.10'; 'node-a' = '192.168.77.11'
+    'node-b' = '192.168.77.12'; 'client-linux' = '192.168.77.100'; 'exit-a' = '192.168.77.20'; 'exit-b' = '192.168.77.21' }
+$sshOpts = '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=NUL',
+    '-o', 'LogLevel=ERROR'
 function Vssh($vm, $cmd) {
-    (& ssh -n -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL `
-        -o LogLevel=ERROR -i "$here\.vagrant\machines\$vm\hyperv\private_key" "vagrant@$($labIp[$vm])" $cmd 2>$null) -join "`n"
+    (& ssh -n @sshOpts -i "$here\.vagrant\machines\$vm\hyperv\private_key" "vagrant@$($labIp[$vm])" $cmd 2>$null) -join "`n"
+}
+function Vscp($vm, [string[]]$src, $dst) {
+    & scp -q @sshOpts -i "$here\.vagrant\machines\$vm\hyperv\private_key" @src "vagrant@$($labIp[$vm]):$dst"
+    if ($LASTEXITCODE) { Fail "copy to $vm failed" }
 }
 function Vwin($cmd) { (& $vagrant winrm client-win -c $cmd 2>$null) -join "`n" }
 function Active { (Invoke-RestMethod "$api/ha/status" -Headers $auth).State.ActiveNodeId }
@@ -105,7 +111,8 @@ if ($Rebuild -or -not (Test-Path "$here\.cache\fakes")) {
 # what the VMs get instead of a synced folder (uploaded and unpacked to /repo, C:\repo)
 $tar = "$env:SystemRoot\System32\tar.exe"
 & $tar -czf "$here\.cache\bundle-linux.tgz" -C $repo deploy/ha test/ha-vagrant/provision test/ha-vagrant/Corefile `
-    test/ha-vagrant/policy.hosts test/ha-vagrant/orchestrator.override.yml test/ha-vagrant/.cache/fakes test/ha-vagrant/.cache/wg-portal.tar.gz
+    test/ha-vagrant/policy.hosts test/ha-vagrant/orchestrator.override.yml test/ha-vagrant/node.override.yml `
+    test/ha-vagrant/.cache/fakes test/ha-vagrant/.cache/wg-portal.tar.gz
 if ($LASTEXITCODE) { Fail 'bundling failed' }
 & $tar -czf "$here\.cache\bundle-win.tgz" -C $repo deploy/ha/clients
 if ($LASTEXITCODE) { Fail 'bundling failed' }
@@ -121,12 +128,38 @@ foreach ($box in $boxes) {
     }
 }
 
+$existed = [bool](& { try { Get-VM -Name wg-ha-lab-orchestrator -ErrorAction Stop } catch { $null } })
 Log 'vagrant up (first run provisions everything, this takes a while)'
 & $vagrant up
 if ($LASTEXITCODE) { Fail 'vagrant up failed' }
 # Windows OpenSSH ignores keys that other users can read (inherited ACLs) and then waits for a password forever
 Get-ChildItem "$here\.vagrant\machines\*\hyperv\private_key" | ForEach-Object {
     icacls $_.FullName /inheritance:r /grant:r "${env:USERNAME}:F" | Out-Null
+}
+
+# vagrant up does not provision existing VMs: hand them the new build instead of recreating them (~40 min)
+if ($Rebuild -and $existed) {
+    Log 'redeploy into the existing VMs: fakes, then orchestrator, then one node at a time'
+    Vscp infra "$here\.cache\fakes" /tmp/fakes
+    Vssh infra 'cmp -s /tmp/fakes /opt/lab/fakes || { sudo install -m 755 /tmp/fakes /opt/lab/fakes && sudo systemctl restart lab-fakes; }' | Out-Null
+    foreach ($vm in 'orchestrator', 'node-a', 'node-b') {
+        $files = if ($vm -eq 'orchestrator') { "$repo\deploy\ha\docker-compose.ha-orchestrator.yml", "$here\orchestrator.override.yml" }
+        else { "$repo\deploy\ha\docker-compose.ha-node.yml", "$here\node.override.yml" }
+        $names = $files | ForEach-Object { Split-Path $_ -Leaf }
+        Vscp $vm (@("$here\.cache\wg-portal.tar.gz") + $files) /tmp/
+        $out = Vssh $vm ("gunzip -c /tmp/wg-portal.tar.gz | sudo docker load -q >/dev/null && cd /opt/wg-portal && " +
+            "sudo cp $(($names | ForEach-Object { "/tmp/$_" }) -join ' ') . && " +
+            "sudo docker compose $(($names | ForEach-Object { "-f $_" }) -join ' ') up -d >/dev/null 2>&1 && echo deployed")
+        if ($out -notmatch 'deployed') { Fail "redeploy on $vm failed" }
+        $t0 = (Get-Date).ToUniversalTime() # the new container is running from here on
+        if ($vm -eq 'orchestrator') { Wait-For 120 'orchestrator API answers' { [bool](Active) } }
+        else {
+            Wait-For 180 "$vm reports in after redeploy" {
+                $n = (Invoke-RestMethod "$api/ha/status" -Headers $auth).Nodes | Where-Object NodeId -eq $vm
+                ([DateTime]$n.LastHeartbeat).ToUniversalTime() -gt $t0
+            }
+        }
+    }
 }
 $clients = @('linux') + $(if ($NoWindows) { @() } else { @('win') })
 
@@ -189,7 +222,7 @@ if (-not $SkipHa) {
     Wait-For 30 'vpn.lab.test -> 192.168.77.11' { (Dns) -eq '192.168.77.11' }
 }
 
-Log 'ROUTING: exit nodes, bypass and blackhole lists (linux client; nodes reconcile every 30s)'
+Log 'ROUTING: exit nodes, bypass and blackhole lists (linux client; the lab nodes reconcile every 5s)'
 # every node is hot, so a client still on node-b keeps a fresh handshake there: restart it only then.
 # The exits carry no test state yet, a restart re-resolves them to the active node.
 if ((Egress-Linux) -ne '192.168.77.11') { Vssh client-linux 'sudo systemctl restart wg-quick@wg0' | Out-Null }

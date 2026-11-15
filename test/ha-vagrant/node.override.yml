@@ -1,0 +1,5 @@
+# Lab settings on top of deploy/ha/docker-compose.ha-node.yml
+services:
+  wg-portal:
+    environment:
+      WG_PORTAL_HA_RECONCILE_INTERVAL: 5s # default 30s: only shortens the scenario's waits for nodes to apply changes
