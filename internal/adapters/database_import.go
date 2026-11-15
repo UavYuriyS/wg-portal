@@ -85,11 +85,19 @@ func ImportDatabase(src, dst *gorm.DB) (map[string]int, error) {
 // encryptPlaintextColumns encrypts the values of "encstr" columns (private keys, preshared keys, API tokens)
 // that are still plain text, for example after importing an install without encryption passphrase. It uses
 // the registered serializer, which returns values unchanged when no passphrase is configured.
+// Values the source had already encrypted were copied as they are: they must decrypt with this passphrase,
+// otherwise the import fails (and rolls back) instead of every later read.
 func encryptPlaintextColumns(tx *gorm.DB) (int, error) {
+	ctx := context.Background()
 	ser, ok := schema.GetSerializer("encstr")
 	if !ok {
 		return 0, nil
 	}
+	probe, err := ser.Value(ctx, nil, reflect.Value{}, "probe")
+	if err != nil {
+		return 0, err
+	}
+	hasPassphrase := probe != "probe"
 	count := 0
 	for _, model := range []any{&domain.Interface{}, &domain.Peer{}, &domain.User{}} {
 		stmt := &gorm.Statement{DB: tx}
@@ -109,9 +117,18 @@ func encryptPlaintextColumns(tx *gorm.DB) (int, error) {
 			for _, row := range rows {
 				plain := fmt.Sprintf("%s", row[f.DBName]) // string or []byte, depending on the driver
 				if strings.HasPrefix(plain, "WG_ENC_") {  // already encrypted, see app.GormEncryptedStringSerializer
+					where := fmt.Sprintf("%s.%s of %v", stmt.Schema.Table, f.DBName, row[pk])
+					if !hasPassphrase {
+						return count, fmt.Errorf("%s is encrypted, but no encryption passphrase is set: "+
+							"use the passphrase of the old installation", where)
+					}
+					if err := ser.Scan(ctx, f, reflect.New(stmt.Schema.ModelType).Elem(), plain); err != nil {
+						return count, fmt.Errorf("%s does not decrypt with this encryption passphrase (%w): "+
+							"use the passphrase of the old installation", where, err)
+					}
 					continue
 				}
-				enc, err := ser.Value(context.Background(), f, reflect.Value{}, plain)
+				enc, err := ser.Value(ctx, f, reflect.Value{}, plain)
 				if err != nil {
 					return count, fmt.Errorf("encrypt %s.%s: %w", stmt.Schema.Table, f.DBName, err)
 				}

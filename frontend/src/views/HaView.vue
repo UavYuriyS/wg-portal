@@ -4,6 +4,7 @@ import {notify} from "@kyvg/vue3-notification";
 import {apiWrapper} from "@/helpers/fetch-wrapper";
 
 const status = ref({Role: '', Nodes: [], JoinTokens: []})
+const loaded = ref(false) // a failed load must not read as "not an orchestrator"
 const newToken = ref('')
 const tokenForm = ref({ValidHours: 24, Uses: 1})
 const busy = ref(false)
@@ -15,6 +16,7 @@ const orchestratorUrl = computed(() => window.location.origin + window.location.
 async function load() {
   try {
     status.value = await apiWrapper.get('/ha/status')
+    loaded.value = true
   } catch (e) {
     notify({title: "Failed to load HA status", text: e.toString(), type: 'error'})
   }
@@ -66,7 +68,7 @@ onUnmounted(() => clearInterval(timer))
     <h1>High Availability</h1>
   </div>
 
-  <p class="lead" v-if="!isOrchestrator">
+  <p class="lead" v-if="loaded && !isOrchestrator">
     This instance is not an HA orchestrator (role: {{ status.Role || 'unknown' }}). Set <code>ha.role: orchestrator</code> to manage a cluster.
   </p>
 

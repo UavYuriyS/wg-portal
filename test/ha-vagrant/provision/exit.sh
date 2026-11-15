@@ -10,7 +10,7 @@ command -v wg >/dev/null || { apt-get update -q; apt-get install -y -q wireguard
 lab=$(ip -o -4 addr show | awk '/ 192\.168\.77\./{print $2; exit}')
 resolvectl dns "$lab" 192.168.77.53
 resolvectl domain "$lab" '~lab.test'
-for _ in $(seq 40); do resolvectl query vpn.lab.test >/dev/null 2>&1 && break; sleep 3; done
+for _ in $(seq 400); do resolvectl query vpn.lab.test >/dev/null 2>&1 && break; sleep 3; done
 resolvectl query vpn.lab.test || { echo "vpn.lab.test does not resolve: no active node?" >&2; exit 1; }
 
 # what the admin prepares on a real exit host: forwarding and masquerade out of the uplink (iptables rules are

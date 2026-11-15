@@ -13,8 +13,9 @@
 # plus a second NIC on the internal "wg-ha-lab" switch (setup-hyperv.ps1) with a MAC derived from its lab IP.
 # The provisioning scripts give that NIC its static lab IP.
 # No synced folders (SMB would need admin rights and credentials): run.ps1 packs what the VMs need into
-# .cache/bundle-*.tgz, which is uploaded to /repo (C:\repo). VMs are provisioned in this order; later VMs
-# fetch the join token and their client configs from the orchestrator (http://192.168.77.10:8099/).
+# .cache/bundle-*.tgz, which is uploaded to /repo (C:\repo). run.ps1 brings the VMs up in parallel
+# (one "vagrant up <vm>" each); their scripts wait for what they need: the join token and client configs from
+# the orchestrator (http://192.168.77.10:8099/), node-b for node-a, the clients and exits for an active node.
 
 unless ENV["VAGRANT_EXPERIMENTAL"].to_s.include?("typed_triggers")
   abort "Set VAGRANT_EXPERIMENTAL=typed_triggers (run.ps1 does) so the lab NIC can be added before boot"
@@ -41,7 +42,7 @@ Vagrant.configure("2") do |config|
      1024, ["provision/infra.sh", []]],
     ["orchestrator", ["192.168.77.10"], 1536, ["provision/orchestrator.sh", []]],
     ["node-a", ["192.168.77.11"], 1536, ["provision/node.sh", ["node-a", "192.168.77.11", "20"]]],
-    ["node-b", ["192.168.77.12"], 1536, ["provision/node.sh", ["node-b", "192.168.77.12", "10"]]],
+    ["node-b", ["192.168.77.12"], 1536, ["provision/node.sh", ["node-b", "192.168.77.12", "10", "node-a"]]],
     ["exit-a", ["192.168.77.20"], 768, ["provision/exit.sh", ["exit-a"]]],
     ["exit-b", ["192.168.77.21"], 768, ["provision/exit.sh", ["exit-b"]]],
     ["client-linux", ["192.168.77.100"], 768, ["provision/client-linux.sh", []]],

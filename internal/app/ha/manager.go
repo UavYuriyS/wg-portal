@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -120,6 +121,7 @@ func (m *Manager) heartbeat(ctx context.Context) {
 	if err := m.repo.TouchHaNodeHeartbeat(ctx, m.cfg.Ha.NodeId, m.now()); err != nil {
 		slog.Warn("ha: heartbeat failed", "node", m.cfg.Ha.NodeId, "error", err)
 	}
+	m.refreshMembers(ctx)
 	state, err := m.repo.GetHaState(ctx)
 	if err != nil {
 		return // keep the last known role while the DB is unavailable
@@ -127,6 +129,40 @@ func (m *Manager) heartbeat(ctx context.Context) {
 	isActive := state.ActiveNodeId == m.cfg.Ha.NodeId
 	if m.active.Swap(isActive) != isActive {
 		slog.Info("ha: node role changed", "node", m.cfg.Ha.NodeId, "active", isActive)
+	}
+}
+
+// refreshMembers adds nodes that joined after this one to its members file and galera.cnf. Galera reads
+// wsrep_cluster_address only at startup, so a node restarting while the orchestrator is down must know
+// the other nodes to rejoin the cluster.
+// shortcut: members are only added (the orchestrator's address is not in the database); a removed node
+// stays listed, which Galera skips as unreachable. Prune once node addresses change often.
+func (m *Manager) refreshMembers(ctx context.Context) {
+	nodes, err := m.repo.GetHaNodes(ctx)
+	if err != nil {
+		return
+	}
+	members, err := readMembers(m.cfg.Ha.DataDir)
+	if err != nil {
+		slog.Warn("ha: failed to read members file", "error", err)
+		return
+	}
+	known := len(members)
+	for _, n := range nodes {
+		if n.PublicIp != "" && !slices.Contains(members, n.PublicIp) {
+			members = append(members, n.PublicIp)
+		}
+	}
+	if len(members) == known {
+		return
+	}
+	cfg := *m.cfg // writeGaleraConfig reloads the node fields into the config it gets
+	if err := writeMembers(cfg.Ha.DataDir, members); err != nil {
+		slog.Warn("ha: failed to update members file", "error", err)
+	} else if err := writeGaleraConfig(&cfg, members); err != nil {
+		slog.Warn("ha: failed to update galera.cnf", "error", err)
+	} else {
+		slog.Info("ha: cluster members updated", "members", members)
 	}
 }
 

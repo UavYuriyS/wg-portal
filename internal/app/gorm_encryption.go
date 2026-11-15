@@ -6,6 +6,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -174,9 +175,12 @@ func DecryptAES256(encrypted, key string) (string, error) {
 	mode := cipher.NewCBCDecrypter(block, []byte(iv))
 	mode.CryptBlocks(ciphertext, ciphertext)
 
-	ciphertext = pkcs7UnPadding(ciphertext)
+	plain, err := pkcs7UnPadding(ciphertext)
+	if err != nil { // what a wrong passphrase produces
+		return "", fmt.Errorf("wrong encryption passphrase or corrupted value: %w", err)
+	}
 
-	return string(ciphertext), nil
+	return string(plain), nil
 }
 
 func pkcs7Padding(ciphertext []byte, blockSize int) []byte {
@@ -185,10 +189,14 @@ func pkcs7Padding(ciphertext []byte, blockSize int) []byte {
 	return append(ciphertext, padtext...)
 }
 
-func pkcs7UnPadding(src []byte) []byte {
+func pkcs7UnPadding(src []byte) ([]byte, error) {
 	length := len(src)
 	unpadding := int(src[length-1])
-	return src[:(length - unpadding)]
+	if unpadding == 0 || unpadding > aes.BlockSize || unpadding > length ||
+		!bytes.Equal(src[length-unpadding:], bytes.Repeat([]byte{byte(unpadding)}, unpadding)) {
+		return nil, errors.New("invalid padding")
+	}
+	return src[:(length - unpadding)], nil
 }
 
 func trimEncKey(key string) string {

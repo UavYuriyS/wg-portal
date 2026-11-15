@@ -32,7 +32,13 @@ if (-not (Get-DnsClientNrptRule | Where-Object Namespace -eq '.lab.test')) {
 
 $dir = "$env:ProgramData\lab"
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
-Invoke-WebRequest -UseBasicParsing 'http://192.168.77.10:8099/client-win.conf' -OutFile "$dir\lab.conf"
+# the VMs come up in parallel: wait for the orchestrator's provisioning, then for an active node
+for ($i = 0; $i -lt 400; $i++) {
+    try { Invoke-WebRequest -UseBasicParsing 'http://192.168.77.10:8099/client-win.conf' -OutFile "$dir\lab.conf"; break }
+    catch { Start-Sleep -Seconds 3 }
+}
+if (-not (Test-Path "$dir\lab.conf")) { throw 'no client config from the orchestrator' }
+for ($i = 0; $i -lt 400 -and -not (Resolve-DnsName vpn.lab.test -DnsOnly -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Seconds 3 }
 if (-not (Get-Service 'WireGuardTunnel$lab' -ErrorAction SilentlyContinue)) {
     & $wg /installtunnelservice "$dir\lab.conf"
     Start-Sleep -Seconds 5

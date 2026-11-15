@@ -141,6 +141,31 @@ func (f *fakeDns) SetA(_ context.Context, ip string, oldIps []string) error {
 	return f.err
 }
 
+func TestNodeRefreshesMembers(t *testing.T) {
+	m, repo, cfg := newTestManager(t)
+	cfg.Ha.Role, cfg.Ha.NodeId, cfg.Ha.PublicIp = config.HaRoleNode, "a", "203.0.113.1"
+	ctx := domain.SetUserInfo(context.Background(), domain.SystemAdminContextUserInfo())
+	// node a joined when only the orchestrator existed; node b joined later
+	if err := writeMembers(cfg.Ha.DataDir, []string{"198.51.100.1", "203.0.113.1"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []domain.HaNode{{NodeId: "a", PublicIp: "203.0.113.1"}, {NodeId: "b", PublicIp: "203.0.113.2"}} {
+		if err := repo.SaveHaNode(ctx, &n); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	m.heartbeat(ctx)
+
+	if members, _ := readMembers(cfg.Ha.DataDir); strings.Join(members, ",") != "198.51.100.1,203.0.113.1,203.0.113.2" {
+		t.Fatalf("members not refreshed: %v", members)
+	}
+	cnf, _ := os.ReadFile(filepath.Join(cfg.Ha.DataDir, "galera.cnf"))
+	if !strings.Contains(string(cnf), "wsrep_cluster_address=gcomm://198.51.100.1,203.0.113.2\n") {
+		t.Fatalf("galera.cnf not refreshed: %q", cnf)
+	}
+}
+
 func TestPromote(t *testing.T) {
 	m, repo, _ := newTestManager(t)
 	ctx := domain.SetUserInfo(context.Background(), domain.SystemAdminContextUserInfo())

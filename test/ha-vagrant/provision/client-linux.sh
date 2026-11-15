@@ -10,7 +10,7 @@ resolvectl dns "$iface" 192.168.77.53
 resolvectl domain "$iface" '~lab.test'
 
 # wg setconf retries an unresolvable endpoint for a very long time, so fail fast instead
-for _ in $(seq 40); do resolvectl query vpn.lab.test >/dev/null 2>&1 && break; sleep 3; done
+for _ in $(seq 400); do resolvectl query vpn.lab.test >/dev/null 2>&1 && break; sleep 3; done
 resolvectl query vpn.lab.test || { echo "vpn.lab.test does not resolve: no active node?" >&2; exit 1; }
 
 curl -sf -o /etc/wireguard/wg0.conf http://192.168.77.10:8099/client-linux.conf

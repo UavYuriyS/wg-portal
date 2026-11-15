@@ -7,9 +7,56 @@ import (
 	"testing"
 
 	"github.com/h44z/wg-portal/internal/adapters"
+	"github.com/h44z/wg-portal/internal/app"
 	"github.com/h44z/wg-portal/internal/config"
 	"github.com/h44z/wg-portal/internal/domain"
 )
+
+func TestImportRejectsForeignPassphrase(t *testing.T) {
+	ctx := domain.SetUserInfo(context.Background(), domain.SystemAdminContextUserInfo())
+	cfg := &config.Config{}
+	srcFile := filepath.Join(t.TempDir(), "sqlite.db")
+	srcDb, err := adapters.NewDatabase(config.DatabaseConfig{Type: config.DatabaseSQLite, DSN: srcFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := adapters.NewSqlRepository(srcDb, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = src.SaveUser(ctx, "alice", func(u *domain.User) (*domain.User, error) {
+		u.Identifier, u.Email = "alice", "alice@example.com"
+		return u, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the old installation encrypted with another passphrase than the cluster's ("test-passphrase")
+	foreign, _ := app.EncryptAES256("api-token-0123456789", "passphrase-of-the-old-installation")
+	if err := srcDb.Exec("UPDATE users SET api_token = ?", "WG_ENC_"+foreign).Error; err != nil {
+		t.Fatal(err)
+	}
+	if sql, err := srcDb.DB(); err == nil {
+		_ = sql.Close()
+	}
+
+	dstDb, err := adapters.NewDatabase(config.DatabaseConfig{Type: config.DatabaseSQLite,
+		DSN: filepath.Join(t.TempDir(), "cluster.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapters.NewSqlRepository(dstDb, cfg); err != nil {
+		t.Fatal(err)
+	}
+	err = ImportStandalone(cfg, dstDb, srcFile)
+	if err == nil || !strings.Contains(err.Error(), "does not decrypt") {
+		t.Fatalf("import must refuse a foreign passphrase, got %v", err)
+	}
+	var users int64
+	if dstDb.Table("users").Count(&users); users != 0 {
+		t.Fatalf("failed import must roll back, %d users left", users)
+	}
+}
 
 func TestImportStandalone(t *testing.T) {
 	ctx := domain.SetUserInfo(context.Background(), domain.SystemAdminContextUserInfo())

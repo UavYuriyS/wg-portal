@@ -1,8 +1,19 @@
 #!/bin/bash
 # HA node from deploy/ha, joined with the token the orchestrator provisioning wrote.
-# usage: node.sh <node id> <public ip> <priority>
+# usage: node.sh <node id> <public ip> <priority> [node that must have joined first]
 set -euo pipefail
-token=$(curl -sf http://192.168.77.10:8099/join-token)
+# the VMs come up in parallel: the orchestrator serves the token once its provisioning is done
+for _ in $(seq 400); do token=$(curl -sf http://192.168.77.10:8099/join-token) && break; sleep 3; done
+[ -n "${token:-}" ] || { echo "no join token from the orchestrator" >&2; exit 1; }
+# Galera: one joiner at a time. Joined means the orchestrator probes the earlier node successfully
+if [ -n "${4:-}" ]; then
+  for _ in $(seq 400); do
+    curl -sf -u admin@wgportal.local:lab-admin-api-token-123456 http://192.168.77.10:8888/api/v1/ha/status |
+      python3 -c "import json,sys; sys.exit(not any(n['NodeId'] == '$4' and n['LastProbeOk'] for n in json.load(sys.stdin)['Nodes']))" &&
+      break
+    sleep 3
+  done
+fi
 
 mkdir -p /opt/wg-portal
 cd /opt/wg-portal

@@ -129,9 +129,32 @@ foreach ($box in $boxes) {
 }
 
 $existed = [bool](& { try { Get-VM -Name wg-ha-lab-orchestrator -ErrorAction Stop } catch { $null } })
-Log 'vagrant up (first run provisions everything, this takes a while)'
-& $vagrant up
-if ($LASTEXITCODE) { Fail 'vagrant up failed' }
+Log 'vagrant up, all VMs in parallel (first run provisions everything: ~20 min; logs in .cache\up-<vm>.log)'
+# Hyper-V has no parallel "vagrant up", so one process per VM; the provisioning scripts wait for each other
+$vms = @('infra', 'orchestrator', 'node-a', 'node-b', 'exit-a', 'exit-b', 'client-linux') + $(if ($NoWindows) { @() } else { @('client-win') })
+$up = @{}
+foreach ($vm in $vms) {
+    $up[$vm] = Start-Process -FilePath $vagrant -ArgumentList 'up', $vm -NoNewWindow -PassThru `
+        -RedirectStandardOutput "$here\.cache\up-$vm.log" -RedirectStandardError "$here\.cache\up-$vm.err"
+    $null = $up[$vm].Handle # keeps ExitCode readable after the process ends
+    Start-Sleep -Seconds 2
+}
+$sw = [Diagnostics.Stopwatch]::StartNew()
+$pending = [Collections.Generic.List[string]]$vms
+while ($pending.Count) {
+    Start-Sleep -Seconds 10
+    foreach ($vm in @($pending)) {
+        if (-not $up[$vm].HasExited) { continue }
+        $pending.Remove($vm) | Out-Null
+        if ($up[$vm].ExitCode) { Write-Host "FAILED: $vm" -ForegroundColor Red } else { Ok "$vm up ($([int]$sw.Elapsed.TotalMinutes) min)" }
+    }
+}
+$failed = @($vms | Where-Object { $up[$_].ExitCode })
+foreach ($vm in $failed) {
+    Write-Host "`n--- $vm (.cache\up-$vm.log)" -ForegroundColor Red
+    Get-Content "$here\.cache\up-$vm.log", "$here\.cache\up-$vm.err" -Tail 25 -ErrorAction SilentlyContinue
+}
+if ($failed) { Fail "vagrant up failed: $($failed -join ', ')" }
 # Windows OpenSSH ignores keys that other users can read (inherited ACLs) and then waits for a password forever
 Get-ChildItem "$here\.vagrant\machines\*\hyperv\private_key" | ForEach-Object {
     icacls $_.FullName /inheritance:r /grant:r "${env:USERNAME}:F" | Out-Null
@@ -181,6 +204,14 @@ Log 'orchestrator MariaDB restart (like a host reboot: no ha-init): rejoins the 
 $galera = 'sudo docker exec wg-portal-mariadb-1 mariadb -uroot -plab-root-password -N -e "show status like ''wsrep_cluster_size''" 2>/dev/null | cut -f2'
 Vssh orchestrator 'sudo docker restart wg-portal-mariadb-1' | Out-Null
 Wait-For 120 'orchestrator back in a 3-member cluster' { (Vssh orchestrator $galera) -eq '3' }
+Wait-For 60 'orchestrator API answers again' { try { [bool](Active) } catch { $false } }
+
+Log 'node-a MariaDB restart while the orchestrator is down: node-a joined first, it must have learned node-b'
+Vssh orchestrator 'sudo docker stop wg-portal-mariadb-1' | Out-Null
+Vssh node-a 'sudo docker restart wg-portal-mariadb-1' | Out-Null
+Wait-For 120 'node-a back in the cluster, through node-b' { (Vssh node-a $galera) -eq '2' }
+Vssh orchestrator 'sudo docker start wg-portal-mariadb-1' | Out-Null
+Wait-For 120 'orchestrator back, 3 members' { (Vssh orchestrator $galera) -eq '3' }
 Wait-For 60 'orchestrator API answers again' { try { [bool](Active) } catch { $false } }
 
 Log 'bootstrap: highest priority node active, DNS points at it, clients connect through it'
