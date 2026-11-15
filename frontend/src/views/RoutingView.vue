@@ -227,7 +227,7 @@ onUnmounted(() => clearInterval(timer))
             <strong>Detected default routes:</strong> these peers carry <code>0.0.0.0/0</code> or <code>::/0</code>
             but are no exit candidates.
             <span v-if="!x.Candidates?.length">Until this interface has exit candidates, such a route sends <em>all</em>
-              of the server's own traffic through the peer.</span>
+              of a standalone server's own traffic through the peer. HA nodes ignore it.</span>
             <span v-else>They are ignored while this interface has exit candidates.</span>
             Add them as candidates, enter their egress IP and save.
             <div v-for="d in x.Detected" :key="d.PeerIdentifier" class="mt-1">

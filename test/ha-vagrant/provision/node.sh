@@ -28,13 +28,16 @@ WG_PORTAL_HA_JOIN_TOKEN=$token
 EOF
 docker compose -f docker-compose.ha-node.yml -f node.override.yml up -d
 
-# joined when the replicated interface is up with its peers (2 clients + the probe peer)
+# joined when the replicated interface is up with its peers (2 clients + the probe peer). It lives in the network
+# namespace of the net service, not on the host
+in_node() { docker compose -f docker-compose.ha-node.yml exec -T wg-portal "$@"; }
 for _ in $(seq 100); do
-  [ "$(wg show wg0 peers 2>/dev/null | wc -l)" -ge 3 ] && break
+  [ "$(in_node wg show wg0 peers 2>/dev/null | wc -l)" -ge 3 ] && break
   sleep 3
 done
-wg show wg0 | head -4
-[ "$(wg show wg0 peers | wc -l)" -ge 3 ]
-iptables -t nat -S POSTROUTING | grep -q MASQUERADE # PostUp ran with real kernel NAT
-iptables -S FORWARD | grep -q -- '-i wg0 -j ACCEPT' # and opened forwarding past Docker's DROP policy
+in_node wg show wg0 | head -4
+[ "$(in_node wg show wg0 peers | wc -l)" -ge 3 ]
+in_node iptables -t nat -S POSTROUTING | grep -q MASQUERADE # PostUp ran with real kernel NAT
+in_node iptables -S FORWARD | grep -q -- '-i wg0 -j ACCEPT'
+! wg show wg0 >/dev/null 2>&1 # and nothing on the host: no host networking
 echo "$1 joined"

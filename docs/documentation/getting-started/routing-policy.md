@@ -24,15 +24,19 @@ candidate. An interface with at least one candidate is in **exit mode**:
   exit.
 - A peer that is not a candidate cannot be saved with `0.0.0.0/0` or `::/0` in its extra allowed IPs.
 
-Interfaces without candidates behave as before. In that case a peer carrying `0.0.0.0/0` gets the wg-quick style
-default route, which takes **all** of the server's own traffic.
+On a standalone server, interfaces without candidates behave as before. In that case a peer carrying `0.0.0.0/0`
+gets the wg-quick style default route, which takes **all** of the server's own traffic.
+
+HA nodes never install that route, with or without candidates. It would also take the Galera replication
+traffic: the nodes would drop out of the cluster and could no longer read the database to undo it. On an HA
+cluster, route clients through a peer by making it an exit candidate.
 
 **Detected default routes.** A peer that carries `0.0.0.0/0` or `::/0` but is not a candidate (typically
 configured before exit nodes existed) is listed as *detected* on the routing page, and in `Detected` of
 `GET /routing/exits`. Nodes also log a warning. To adopt it, use *Add as candidate*, enter its egress IP and save.
-The interface then enters exit mode, and the peer is the active exit, because it already has the marker. Every
-server re-syncs its routes when an interface enters or leaves exit mode, so HA nodes drop the system-wide route
-within one apply interval, even though the peer itself did not change.
+The interface then enters exit mode, and the peer is the active exit, because it already has the marker. A
+standalone server re-syncs its routes when an interface enters or leaves exit mode, so it drops the system-wide
+route within one apply interval, even though the peer itself did not change.
 
 A packet from a peer (`iif wg0`) passes:
 

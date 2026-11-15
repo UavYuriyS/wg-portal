@@ -46,6 +46,7 @@ users ─udp─> vpn.example.com ──> NODE A (active)        NODE B (standby)
 ## Requirements
 
 - MariaDB 10.6+ (the compose files use 11.4) on every party. wg-portal must use `database.type: mysql`.
+- The WireGuard listen ports of all server interfaces open on the nodes, for users and the health probes.
 - Galera ports open between all parties: `4567/tcp+udp`, `4568/tcp` and `4444/tcp`. The traffic is
   authenticated and encrypted with certificates from the cluster CA.
 - A low TTL (30–60s) on the VPN record. The zone must be hosted on reg.ru DNS servers, and API access must be
@@ -91,8 +92,10 @@ chain.
 Create the WireGuard server interface in the UI as usual:
 
 - Set the peer default endpoint to the VPN DNS name, for example `vpn.example.com:51820`.
-- Add NAT and forwarding rules to `PostUp`/`PostDown`. Docker sets the `FORWARD` policy to `DROP` on the nodes,
-  so allow the tunnel explicitly. Otherwise handshakes work, but no traffic passes and every health probe fails:
+- Add NAT and forwarding rules to `PostUp`/`PostDown`. The masquerade rule is required: on the nodes, the
+  interface lives in a container network namespace, and Docker only NATs traffic from the container's own
+  address. The `FORWARD` rules keep the same rules working on hosts whose `FORWARD` policy is `DROP`. Without
+  them, handshakes work, but no traffic passes and every health probe fails:
 
   ```
   PostUp:   iptables -I FORWARD -i %i -j ACCEPT; iptables -I FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -s 10.11.12.0/24 ! -d 10.11.12.0/24 -j MASQUERADE
@@ -126,6 +129,29 @@ What happens on the node:
 4. wg-portal brings up all interfaces and peers.
 
 The token is only needed for this first start. Join one node at a time.
+
+Nodes do not use host networking either. A small `net` service owns the network namespace that `mariadb` and
+`wg-portal` share, so the WireGuard interfaces, routes and firewall rules live there and survive restarts and
+upgrades of both services. What this means:
+
+- **Ports.** `net` publishes the Galera ports and the WireGuard ports in `WG_PORTS` (`.env`, default `51820`).
+  List every listen port of the cluster's server interfaces as one range, for example `WG_PORTS=51820-51829`.
+  A node without the port of an interface fails its health probes. Changing `WG_PORTS` recreates the
+  containers, so the node's tunnels drop for a moment: change standbys first. Ports that Docker publishes
+  bypass host firewalls such as ufw; use the `DOCKER-USER` chain to restrict them.
+- **Restarts.** Restart the node with `docker compose restart` or `up -d`, never the `net` container alone with
+  `docker restart`: the other containers would keep running in its old, unreachable namespace.
+- **Inspecting.** `wg show`, `ip rule` and `iptables` on the host do not show the node's state. Run them in the
+  container, for example `docker compose -f docker-compose.ha-node.yml exec wg-portal wg show`.
+- **Egress.** Tunnel traffic leaves with the host's address, like before. Peers are not reachable from the
+  host's other networks, because these networks have no route into the container. IPv6 egress needs
+  `enable_ipv6` on the compose network.
+
+!!! note "Nodes joined with host networking"
+    A node that joined with an older compose file keeps its config and database. Stop it with
+    `docker compose down`, delete its old interfaces on the host (`ip link del wg0`, or reboot the host), then
+    start it with the new compose file. The old interface would block the WireGuard port otherwise. Upgrade
+    the standbys first and promote one of them before you switch the active node.
 
 The first healthy node becomes active automatically. The orchestrator then points the DNS record at it.
 
@@ -180,7 +206,8 @@ stay the same, so clients keep their configs. They only need to reach the server
    active and the VPN DNS record is pointed at it.
 7. **Reuse the old server, if you want.** Stop its old wg-portal and move `sqlite.db` off the server into a
    protected backup, or delete it (it may hold all keys in plain text). Then join it as a node with the
-   highest priority. It takes over the existing interface in place.
+   highest priority. Delete its old interface before the first start (`ip link del wg0`): the node brings
+   up its own copy in the container, and the old one would block the port.
 
 !!! note
     If the portal URL changes, passkeys (WebAuthn) registered under the old domain stop working. Users can

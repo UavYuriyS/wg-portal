@@ -170,7 +170,14 @@ if ($Rebuild -and $existed) {
         else { "$repo\deploy\ha\docker-compose.ha-node.yml", "$here\node.override.yml" }
         $names = $files | ForEach-Object { Split-Path $_ -Leaf }
         Vscp $vm (@("$here\.cache\wg-portal.tar.gz") + $files) /tmp/
-        $out = Vssh $vm ("gunzip -c /tmp/wg-portal.tar.gz | sudo docker load -q >/dev/null && cd /opt/wg-portal && " +
+        # nodes deployed with host networking left their interfaces on the host, holding the WireGuard port;
+        # stop the old wg-portal first, or its reconciler re-creates them
+        $hostIfaces = if ($vm -eq 'orchestrator') { '' }
+        else {
+            'cd /opt/wg-portal && sudo docker compose -f docker-compose.ha-node.yml -f node.override.yml stop wg-portal ' +
+            '>/dev/null 2>&1; for i in $(sudo wg show interfaces); do sudo ip link del "$i"; done; '
+        }
+        $out = Vssh $vm ($hostIfaces + "gunzip -c /tmp/wg-portal.tar.gz | sudo docker load -q >/dev/null && cd /opt/wg-portal && " +
             "sudo cp $(($names | ForEach-Object { "/tmp/$_" }) -join ' ') . && " +
             "sudo docker compose $(($names | ForEach-Object { "-f $_" }) -join ' ') up -d >/dev/null 2>&1 && echo deployed")
         if ($out -notmatch 'deployed') { Fail "redeploy on $vm failed" }
@@ -216,7 +223,8 @@ Wait-For 60 'orchestrator API answers again' { try { [bool](Active) } catch { $f
 
 Log 'bootstrap: highest priority node active, DNS points at it, clients connect through it'
 # a repeated run starts from a clean state: no block, node-a active, client tunnels freshly resolved
-$unblock = 'while sudo iptables -D INPUT -p udp --dport 51820 -j DROP 2>/dev/null; do :; done'
+# raw PREROUTING: Docker DNATs the published port to the node's container, so INPUT never sees the traffic
+$unblock = 'while sudo iptables -t raw -D PREROUTING -p udp --dport 51820 -j DROP 2>/dev/null; do :; done'
 Vssh node-a $unblock | Out-Null
 if ((& { try { Active } catch { '' } }) -notin @('', 'node-a')) {
     Invoke-RestMethod -Method Post "$api/ha/promote/node-a" -Headers $auth | Out-Null
@@ -232,7 +240,7 @@ if ($clients -contains 'win') { Wait-For 120 'windows client egress via node-a' 
 if (-not $SkipHa) {
     Log 'FAILOVER: node-a gets blacklisted (it drops all incoming WireGuard traffic)'
     # blocked on the node itself: a Windows Firewall rule on the client does not stop WireGuard for Windows
-    Vssh node-a 'sudo iptables -I INPUT -p udp --dport 51820 -j DROP' | Out-Null
+    Vssh node-a 'sudo iptables -t raw -I PREROUTING -p udp --dport 51820 -j DROP' | Out-Null
     $start = Get-Date
     Wait-For 120 'node-b promoted' { (Active) -eq 'node-b' }
     Wait-For 60 'vpn.lab.test -> 192.168.77.12' { (Dns) -eq '192.168.77.12' }
@@ -307,7 +315,7 @@ Vssh exit-a 'sudo systemctl start wg-quick@wg0' | Out-Null
 Wait-For 60 'exit-a up: exit check ok' { (ExitCheck).Ok -eq $true }
 
 Log 'ROUTING FAILOVER: node-a blacklisted while exit-a is active (no deadlock)'
-Vssh node-a 'sudo iptables -I INPUT -p udp --dport 51820 -j DROP' | Out-Null
+Vssh node-a 'sudo iptables -t raw -I PREROUTING -p udp --dport 51820 -j DROP' | Out-Null
 $start = Get-Date
 Wait-For 120 'node-b promoted' { (Active) -eq 'node-b' }
 $promoted = ((Get-Date) - $start).TotalSeconds
@@ -327,7 +335,7 @@ foreach ($vm in 'client-linux', 'exit-a', 'exit-b') { Vssh $vm 'sudo resolvectl 
 Vssh client-linux $policyDns | Out-Null
 Wait-For 90 'linux client egress through exit-a' { (Egress-Linux) -eq '192.168.77.20' }
 
-Log 'DETECTED DEFAULT ROUTE: a peer with 0.0.0.0/0 from before exit nodes, then adopted as a candidate'
+Log 'DETECTED DEFAULT ROUTE: a peer with 0.0.0.0/0 from before exit nodes (ignored by HA nodes), then adopted'
 Set-Exit ''
 V0 PUT '/routing/exits/wg0/candidates' @() | Out-Null
 $legacy = Invoke-RestMethod "$api/peer/prepare/wg0" -Headers $auth
@@ -337,13 +345,18 @@ $legacyId = (Invoke-RestMethod -Method Post "$api/peer/new" -Headers $auth -Cont
         -Body (ConvertTo-Json -InputObject $legacy -Depth 10)).Identifier
 Wait-For 30 'reported as detected' { @((V0 GET '/routing/exits')[0].Detected.PeerIdentifier) -contains $legacyId }
 # default routes on wg0 outside the exit tables (0x57000000 + ifindex): the wg-quick style route for ALL traffic
-$wgQuickDefault = 'ip -4 route show table all | awk ''/^default dev wg0 table/ && $5 < 1459617792 {n++} END {print n+0}'''
-Wait-For 90 'node-a: wg-quick style default route installed (no exit mode yet)' { (Vssh node-a $wgQuickDefault) -eq '1' }
+# in the node's network namespace (owned by its net container), not on the host
+$wgQuickDefault = 'sudo nsenter -n -t $(sudo docker inspect -f {{.State.Pid}} wg-portal-net-1) ip -4 route show table all | awk ''/^default dev wg0 table/ && $5 < 1459617792 {n++} END {print n+0}'''
+$legacyApplied = 'sudo nsenter -n -t $(sudo docker inspect -f {{.State.Pid}} wg-portal-net-1) wg show wg0 allowed-ips | grep -c 0.0.0.0/0'
+# HA nodes never install it: wg-quick style it would also take the Galera traffic and split the cluster
+Wait-For 90 'node-a: legacy peer applied, without a wg-quick style default route' {
+    (Vssh node-a $legacyApplied) -eq '1' -and (Vssh node-a $wgQuickDefault) -eq '0' }
+if ((Vssh node-a $galera) -ne '3') { Fail 'node-a left the Galera cluster after the default route peer appeared' }
 V0 PUT '/routing/exits/wg0/candidates' @(@{ PeerIdentifier = $legacyId; EgressIp = '192.0.2.99' }) | Out-Null
 Wait-For 30 'adopted: active exit, no longer detected' {
     $x = (V0 GET '/routing/exits')[0]; $x.ActivePeerIdentifier -eq $legacyId -and @($x.Detected).Count -eq 0 }
-# the peer itself did not change: only the routing manager's exit mode re-sync removes the route on the node
-Wait-For 90 'node-a: wg-quick style default route removed' { (Vssh node-a $wgQuickDefault) -eq '0' }
+# as the active exit it is routed through the exit table only, still no wg-quick style route
+Wait-For 90 'node-a: still no wg-quick style default route' { (Vssh node-a $wgQuickDefault) -eq '0' }
 Invoke-RestMethod -Method Delete "$api/peer/by-id/$legacyId" -Headers $auth | Out-Null
 V0 PUT '/routing/exits/wg0/candidates' @() | Out-Null
 Wait-For 90 'cleaned up: linux client egress via node-a' { (Egress-Linux) -eq '192.168.77.11' }

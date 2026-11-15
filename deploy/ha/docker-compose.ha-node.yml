@@ -1,12 +1,15 @@
 # HA WireGuard node. Join once with:
 #   WG_PORTAL_HA_ORCHESTRATOR_URL=https://portal.example.com WG_PORTAL_HA_JOIN_TOKEN=<token> docker compose -f docker-compose.ha-node.yml up -d
 # Afterwards the token is no longer needed (./data/ha/joined exists).
+# Optional in .env: WG_PORTS (default 51820): every WireGuard listen port of the cluster, a range like 51820-51829.
+# No host networking: the WireGuard interfaces live in the network namespace of the "net" service. Inspect them with
+#   docker compose -f docker-compose.ha-node.yml exec wg-portal wg show
 services:
   ha-init:
     image: ${WG_PORTAL_IMAGE:-wgportal/wg-portal:v2}
     command: ["-ha-init"]
     restart: "no"
-    network_mode: host # hostname is the default node id
+    uts: host # the host name is the default node id
     environment:
       WG_PORTAL_HA_ROLE: node
       WG_PORTAL_HA_NODE_ID: ${WG_PORTAL_HA_NODE_ID:-}
@@ -17,10 +20,29 @@ services:
     volumes:
       - ./data:/app/data
 
+  # Owns the network namespace of mariadb and wg-portal, so the WireGuard interfaces survive restarts and upgrades
+  # of both. Never restart it alone: the others would stay in its old namespace. Use docker compose up -d / restart.
+  net:
+    image: alpine:3.24
+    command: ["sleep", "infinity"]
+    init: true
+    restart: unless-stopped
+    ports: # Docker-published ports bypass ufw: restrict them in DOCKER-USER if needed
+      - "${WG_PORTS:-51820}:${WG_PORTS:-51820}/udp" # WireGuard, from users and the orchestrator's health probes
+      - "4567:4567/tcp" # Galera, reachable from all members
+      - "4567:4567/udp"
+      - "4568:4568/tcp"
+      - "4444:4444/tcp"
+    sysctls:
+      net.ipv4.ip_forward: 1
+      net.ipv4.conf.all.src_valid_mark: 1
+      net.ipv6.conf.all.disable_ipv6: 0 # interfaces may have IPv6 addresses even if the Docker network has none
+      net.ipv6.conf.all.forwarding: 1
+
   mariadb:
     image: mariadb:11.4
     restart: unless-stopped
-    network_mode: host # Galera: 4567/tcp+udp, 4568/tcp, 4444/tcp must be reachable from all members
+    network_mode: service:net
     depends_on:
       ha-init:
         condition: service_completed_successfully
@@ -34,7 +56,7 @@ services:
   wg-portal:
     image: ${WG_PORTAL_IMAGE:-wgportal/wg-portal:v2}
     restart: unless-stopped # also retries until the local Galera member is synced
-    network_mode: host
+    network_mode: service:net # 127.0.0.1:3306 is the local Galera member
     cap_add: [NET_ADMIN]
     depends_on: [mariadb]
     environment:

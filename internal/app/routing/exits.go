@@ -22,7 +22,8 @@ type ExitInfo struct {
 	ActivePeerIdentifier domain.PeerIdentifier // empty: no exit active
 	Candidates           []ExitCandidateInfo
 	// Detected are peers that carry 0.0.0.0/0 or ::/0 but are no candidates, e.g. from before exit nodes
-	// existed. Without candidates the route manager installs that default route for ALL server traffic.
+	// existed. Without candidates a standalone server installs that default route for ALL server traffic; HA nodes
+	// never install it.
 	Detected []ExitCandidateInfo
 }
 

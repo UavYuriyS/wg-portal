@@ -179,13 +179,19 @@ func (m Manager) removeRoutes(ctx context.Context, info domain.RoutingTableInfo)
 	return nil
 }
 
-// withoutExitRoutes strips 0.0.0.0/0 and ::/0 on interfaces in exit mode. Installed wg-quick style, a
-// default route would send the server's own traffic (database replication, SSH replies) through the exit;
-// the routing policy (app/routing) routes only traffic arriving from the interface there instead.
+// withoutExitRoutes strips 0.0.0.0/0 and ::/0 on interfaces in exit mode, and always on HA nodes. Installed
+// wg-quick style, a default route would send the server's own traffic (database replication, SSH replies) through
+// the peer; the routing policy (app/routing) routes only traffic arriving from the interface there instead.
 func (m Manager) withoutExitRoutes(ctx context.Context, info domain.RoutingTableInfo) (
 	domain.RoutingTableInfo,
 	error,
 ) {
+	if m.cfg != nil && m.cfg.Ha.IsNode() {
+		// it would take the Galera traffic too: the node drops out of the cluster and can no longer read the
+		// database to undo it. Decided without the database, so it also holds while the database is unavailable.
+		info.AllowedIps = domain.StripDefaultRoutes(info.AllowedIps)
+		return info, nil
+	}
 	candidates, err := m.db.GetExitCandidates(ctx, info.Interface.Identifier)
 	if err != nil {
 		// unknown exit mode: keep the current kernel routes rather than risk hijacking all server traffic

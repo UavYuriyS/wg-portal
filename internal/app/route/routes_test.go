@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/h44z/wg-portal/internal/config"
 	"github.com/h44z/wg-portal/internal/domain"
 )
 
@@ -56,4 +57,11 @@ func TestDefaultRoutesStrippedInExitMode(t *testing.T) {
 	require.NoError(t, m.removeRoutes(context.Background(), info))
 	assert.Equal(t, "10.11.12.2/32", domain.CidrsToString(rc.set))
 	assert.Equal(t, "10.11.12.2/32", domain.CidrsToString(rc.removed))
+
+	// HA nodes: never, even without candidates
+	cfg := &config.Config{}
+	cfg.Ha.Role = config.HaRoleNode
+	m = Manager{cfg: cfg, db: fakeDb{}, wgController: fakeControllerManager{rc}}
+	require.NoError(t, m.syncRoutes(context.Background(), info))
+	assert.Equal(t, "10.11.12.2/32", domain.CidrsToString(rc.set))
 }

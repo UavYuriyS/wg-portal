@@ -248,8 +248,9 @@ func (m *Manager) loadLists(ctx context.Context) error {
 }
 
 // resyncRoutesOnExitModeChange re-publishes the routes of interfaces that entered or left exit mode: the route
-// manager strips default routes only in exit mode. HA nodes would otherwise keep a wg-quick style default route
-// (which captures all server traffic) until the peer carrying it changes, because candidates are no peer change.
+// manager strips default routes in exit mode (on standalone servers; HA nodes always strip them). A standalone
+// server would otherwise keep a wg-quick style default route (which captures all server traffic) until the peer
+// carrying it changes, because candidates are no peer change.
 func (m *Manager) resyncRoutesOnExitModeChange(ctx context.Context, modes map[domain.InterfaceIdentifier]bool) {
 	for id, on := range modes {
 		if m.exitModes[id] == on {
@@ -307,12 +308,13 @@ func (m *Manager) buildSpec(ctx context.Context) (
 				continue
 			}
 			m.warnedDetected[p.Identifier] = true
-			if len(candidates) == 0 {
+			if len(candidates) == 0 && !m.cfg.Ha.IsNode() {
 				slog.Warn("routing: peer has a default route but is no exit candidate; the route manager sends "+
 					"ALL server traffic through it until it is added as an exit candidate on the routing page",
 					"interface", iface.Identifier, "peer", p.Identifier, "name", p.DisplayName)
 			} else {
-				slog.Warn("routing: peer has a default route but is no exit candidate; it is ignored in exit mode",
+				slog.Warn("routing: peer has a default route but is no exit candidate; it is ignored in exit mode "+
+					"and on HA nodes",
 					"interface", iface.Identifier, "peer", p.Identifier, "name", p.DisplayName)
 			}
 		}
