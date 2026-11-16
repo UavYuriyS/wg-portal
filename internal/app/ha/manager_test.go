@@ -260,6 +260,18 @@ func TestRegRuDns(t *testing.T) {
 	}
 }
 
+func TestProbePort(t *testing.T) {
+	for endpoint, want := range map[string]string{
+		"vpn.example.com:41489": "41489", // port forward 41489 -> listen port 41488
+		"vpn.example.com":       "41488", // no port: the listen port
+		"":                      "41488",
+	} {
+		if got := probePort(domain.Interface{ListenPort: 41488, PeerDefEndpoint: endpoint}); got != want {
+			t.Errorf("%q: got %s, want %s", endpoint, got, want)
+		}
+	}
+}
+
 func toStr(v any) string {
 	s, _ := v.(string)
 	return s

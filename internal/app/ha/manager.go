@@ -334,7 +334,7 @@ func (m *Manager) probeTarget(ctx context.Context, pick func(domain.HaProbePeer)
 				continue
 			}
 			return ProbeTarget{
-				Endpoint:        strconv.Itoa(iface.ListenPort),
+				Endpoint:        probePort(iface),
 				ServerPublicKey: iface.PublicKey,
 				ClientKeys:      peer.Interface.KeyPair,
 				PresharedKey:    peer.PresharedKey,
@@ -344,6 +344,15 @@ func (m *Manager) probeTarget(ctx context.Context, pick func(domain.HaProbePeer)
 		}
 	}
 	return ProbeTarget{}, "", errors.New("no enabled server interface with a probe peer")
+}
+
+// probePort is the port clients connect to: the one in the peers' default endpoint, which differs from the
+// listen port behind a port forward. The host part is ignored, probeVia dials every node IP directly.
+func probePort(iface domain.Interface) string {
+	if _, port, err := net.SplitHostPort(iface.PeerDefEndpoint); err == nil && port != "" {
+		return port
+	}
+	return strconv.Itoa(iface.ListenPort)
 }
 
 // ensureProbePeers creates the node probe peer and the exit probe peer for every server interface that

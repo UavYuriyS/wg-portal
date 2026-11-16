@@ -24,6 +24,9 @@ users ─udp─> vpn.example.com ──> NODE A (active)        NODE B (standby)
 - **Health probe.** The orchestrator connects to every node's *public IP* with an in-process WireGuard client
   (the probe peer it creates per server interface) and requests `ha.probe_url` (ipify) through the tunnel.
   The node is healthy when the observed egress IP equals the **node's own public IP**.
+    - The probe connects to the port of the interface's default peer endpoint (what users connect to), or to
+      the listen port when the endpoint has no port. A port forward in front of WireGuard is therefore probed
+      through, like a user would connect.
     - Place the orchestrator in the same network region as your users, so a node that is blacklisted for them
       also fails the probe.
     - The node must NAT the tunnel traffic (for example a `PostUp` masquerade rule).
