@@ -40,8 +40,8 @@ type PeerService interface {
 	GetPeerConfigQrCode(ctx context.Context, id domain.PeerIdentifier, style string) (io.Reader, error)
 	// SendPeerEmail sends the peer configuration via email.
 	SendPeerEmail(ctx context.Context, linkOnly bool, style string, peers ...domain.PeerIdentifier) error
-	// GetPeerStats returns the peer stats for the given interface.
-	GetPeerStats(ctx context.Context, id domain.InterfaceIdentifier) ([]domain.PeerStatus, error)
+	// GetPeerStats returns the peer stats for the given interface, as seen by the given HA node if set.
+	GetPeerStats(ctx context.Context, id domain.InterfaceIdentifier, nodeId string) ([]domain.PeerStatus, error)
 	// BulkDelete deletes multiple peers.
 	BulkDelete(context.Context, []domain.PeerIdentifier) error
 	// BulkUpdate modifies multiple peers.
@@ -499,6 +499,7 @@ func (e PeerEndpoint) handleEmailPost() http.HandlerFunc {
 // @Summary Get peer stats for the given interface.
 // @Produce json
 // @Param iface path string true "The interface identifier"
+// @Param node query string false "HA node id: the sessions that node's kernel sees instead of the active node's"
 // @Success 200 {object} model.PeerStats
 // @Failure 400 {object} model.Error
 // @Failure 500 {object} model.Error
@@ -512,7 +513,8 @@ func (e PeerEndpoint) handleStatsGet() http.HandlerFunc {
 			return
 		}
 
-		stats, err := e.peerService.GetPeerStats(r.Context(), domain.InterfaceIdentifier(interfaceId))
+		stats, err := e.peerService.GetPeerStats(r.Context(), domain.InterfaceIdentifier(interfaceId),
+			request.Query(r, "node"))
 		if err != nil {
 			respond.JSON(w, http.StatusInternalServerError,
 				model.Error{Code: http.StatusInternalServerError, Message: err.Error()})

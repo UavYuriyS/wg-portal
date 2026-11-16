@@ -89,6 +89,7 @@ onUnmounted(() => clearInterval(timer))
           <th scope="col" class="text-center">Priority</th>
           <th scope="col">Probe</th>
           <th scope="col">Heartbeat</th>
+          <th scope="col" class="text-center" title="Clients with a recent handshake on this node's kernel">Connected</th>
           <th scope="col" class="text-end">Actions</th>
         </tr>
         </thead>
@@ -107,6 +108,11 @@ onUnmounted(() => clearInterval(timer))
             <small class="text-muted ms-1">{{ node.LastProbeResult }} · {{ age(node.LastProbeAt) }}</small>
           </td>
           <td>{{ age(node.LastHeartbeat) }}</td>
+          <td class="text-center">
+            {{ node.ConnectedPeers }}
+            <span v-if="!node.IsActive && node.ConnectedPeers > 0" class="badge bg-warning text-dark ms-1"
+                  title="These clients did not follow DNS to the active node yet">clients stuck on this node</span>
+          </td>
           <td class="text-end text-nowrap">
             <button class="btn btn-sm btn-primary me-1" :disabled="busy || node.IsActive" @click="promote(node)"
                     title="Make this the active node and point DNS at it">

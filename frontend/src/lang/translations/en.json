@@ -113,6 +113,10 @@
     "headline": "Interface Administration",
     "headline-peers": "Current VPN Peers",
     "headline-endpoints": "Current Endpoints",
+    "stats-node": {
+      "label": "Connections seen by",
+      "active": "Active node (default)"
+    },
     "no-interface": {
       "default-selection": "No Interface available",
       "headline": "No interfaces found...",

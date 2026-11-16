@@ -13,6 +13,7 @@ import {notify} from "@kyvg/vue3-notification";
 import {settingsStore} from "@/stores/settings";
 import {humanFileSize} from '@/helpers/utils';
 import {useI18n} from "vue-i18n";
+import {apiWrapper} from "@/helpers/fetch-wrapper";
 
 const settings = settingsStore()
 const interfaces = interfaceStore()
@@ -25,6 +26,7 @@ const editPeerId = ref("")
 const multiCreatePeerId = ref("")
 const editInterfaceId = ref("")
 const viewedInterfaceId = ref("")
+const haNodes = ref([])
 
 const sortKey = ref("")
 const sortOrder = ref(1)
@@ -161,6 +163,8 @@ onMounted(async () => {
   await interfaces.LoadInterfaces()
   await peers.LoadPeers(undefined) // use default interface
   await peers.LoadStats(undefined) // use default interface
+  // shortcut: the node view refreshes on load and on change only, no websocket push
+  apiWrapper.get('/ha/status').then(s => haNodes.value = s.Nodes || []).catch(() => {}) // standalone: no nodes
 })
 </script>
 
@@ -178,7 +182,13 @@ onMounted(async () => {
     </div>
     <div class="col-12 col-lg-4 text-end">
       <div class="form-group">
-
+        <div v-if="haNodes.length" class="input-group mb-3">
+          <span class="input-group-text">{{ $t('interfaces.stats-node.label') }}</span>
+          <select v-model="peers.statsNode" class="form-select" @change="peers.LoadStats()">
+            <option value="">{{ $t('interfaces.stats-node.active') }}</option>
+            <option v-for="node in haNodes" :key="node.NodeId" :value="node.NodeId">{{ node.NodeId }}</option>
+          </select>
+        </div>
       </div>
       <div class="form-group">
         <div class="input-group mb-3">

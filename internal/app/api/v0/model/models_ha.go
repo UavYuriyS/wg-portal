@@ -17,6 +17,7 @@ type HaNode struct {
 	LastProbeResult  string     `json:"LastProbeResult"`
 	ConsecutiveFails int        `json:"ConsecutiveFails"`
 	IsActive         bool       `json:"IsActive"`
+	ConnectedPeers   int        `json:"ConnectedPeers"` // fresh sessions seen by this node, HA probe peers excluded
 }
 
 type HaJoinToken struct {
@@ -56,7 +57,13 @@ type HaJoinTokenResponse struct {
 	Token string `json:"Token"`
 }
 
-func NewHaStatus(role string, state domain.HaState, nodes []domain.HaNode, tokens []domain.HaJoinToken) HaStatus {
+func NewHaStatus(
+	role string,
+	state domain.HaState,
+	nodes []domain.HaNode,
+	tokens []domain.HaJoinToken,
+	connectedPeers map[string]int,
+) HaStatus {
 	s := HaStatus{
 		Role:         role,
 		ActiveNodeId: state.ActiveNodeId,
@@ -79,6 +86,7 @@ func NewHaStatus(role string, state domain.HaState, nodes []domain.HaNode, token
 			LastProbeResult:  n.LastProbeResult,
 			ConsecutiveFails: n.ConsecutiveFails,
 			IsActive:         n.NodeId == state.ActiveNodeId,
+			ConnectedPeers:   connectedPeers[n.NodeId],
 		}
 	}
 	for i, t := range tokens {

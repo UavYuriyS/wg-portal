@@ -232,7 +232,7 @@ func (r *SqlRepo) migrate() error {
 	slog.Debug("running migration: interface status", "result", r.db.AutoMigrate(&domain.InterfaceStatus{}))
 	slog.Debug("running migration: audit data", "result", r.db.AutoMigrate(&domain.AuditEntry{}))
 	slog.Debug("running migration: ha", "result", r.db.AutoMigrate(&domain.HaNode{}, &domain.HaState{},
-		&domain.HaJoinToken{}, &domain.HaProbePeer{}))
+		&domain.HaJoinToken{}, &domain.HaProbePeer{}, &domain.HaPeerSession{}))
 	slog.Debug("running migration: routing", "result", r.db.AutoMigrate(&domain.ExitCandidate{},
 		&domain.RoutingList{}, &domain.RoutingSettings{}))
 

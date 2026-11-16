@@ -24,7 +24,7 @@ type PeerServicePeerManager interface {
 		interfaceId domain.InterfaceIdentifier,
 		r *domain.PeerCreationRequest,
 	) ([]domain.Peer, error)
-	GetPeerStats(ctx context.Context, id domain.InterfaceIdentifier) ([]domain.PeerStatus, error)
+	GetPeerStats(ctx context.Context, id domain.InterfaceIdentifier, nodeId string) ([]domain.PeerStatus, error)
 }
 
 type PeerServiceConfigFileManager interface {
@@ -116,8 +116,12 @@ func (p PeerService) SendPeerEmail(
 	return p.mailer.SendPeerEmail(ctx, linkOnly, style, peers...)
 }
 
-func (p PeerService) GetPeerStats(ctx context.Context, id domain.InterfaceIdentifier) ([]domain.PeerStatus, error) {
-	return p.peers.GetPeerStats(ctx, id)
+func (p PeerService) GetPeerStats(
+	ctx context.Context,
+	id domain.InterfaceIdentifier,
+	nodeId string,
+) ([]domain.PeerStatus, error) {
+	return p.peers.GetPeerStats(ctx, id, nodeId)
 }
 
 func (p PeerService) BulkDelete(ctx context.Context, ids []domain.PeerIdentifier) error {

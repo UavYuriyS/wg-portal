@@ -91,7 +91,8 @@ func (e HaEndpoint) handleStatusGet() http.HandlerFunc {
 			return
 		}
 		respond.JSON(w, http.StatusOK,
-			model.NewHaStatus(string(e.cfg.Ha.Role), status.State, status.Nodes, status.Tokens))
+			model.NewHaStatus(string(e.cfg.Ha.Role), status.State, status.Nodes, status.Tokens,
+				status.ConnectedPeers))
 	}
 }
 

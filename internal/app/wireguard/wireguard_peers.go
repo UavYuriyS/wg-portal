@@ -463,8 +463,13 @@ func (m Manager) DeletePeer(ctx context.Context, id domain.PeerIdentifier) error
 	return nil
 }
 
-// GetPeerStats returns the status of the peer with the given identifier.
-func (m Manager) GetPeerStats(ctx context.Context, id domain.InterfaceIdentifier) ([]domain.PeerStatus, error) {
+// GetPeerStats returns the status of the peers of the given interface. With a HA node id, the statuses are
+// built from the sessions that node's kernel reported, instead of the active node's peer_statuses.
+func (m Manager) GetPeerStats(
+	ctx context.Context,
+	id domain.InterfaceIdentifier,
+	nodeId string,
+) ([]domain.PeerStatus, error) {
 	_, peers, err := m.db.GetInterfaceAndPeers(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch peers for interface %s: %w", id, err)
@@ -479,7 +484,22 @@ func (m Manager) GetPeerStats(ctx context.Context, id domain.InterfaceIdentifier
 		peerIds[i] = peer.Identifier
 	}
 
-	return m.db.GetPeersStats(ctx, peerIds...)
+	if nodeId == "" {
+		return m.db.GetPeersStats(ctx, peerIds...)
+	}
+
+	sessions, err := m.db.GetHaPeerSessions(ctx, nodeId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch sessions of node %s: %w", nodeId, err)
+	}
+	stats := make([]domain.PeerStatus, 0, len(sessions))
+	// shortcut: linear peer lookup per session, switch to a set if interfaces grow to many thousand peers
+	for _, s := range sessions {
+		if slices.Contains(peerIds, s.PeerIdentifier) && s.Fresh(m.cfg.Statistics.DataCollectionInterval) {
+			stats = append(stats, s.PeerStatus(m.cfg.Backend.ReKeyTimeoutInterval))
+		}
+	}
+	return stats, nil
 }
 
 // GetUserPeerStats returns the status of all peers for the given user.

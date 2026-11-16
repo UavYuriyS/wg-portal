@@ -223,3 +223,44 @@ func TestStatisticsRollbackDoesNotPublish(t *testing.T) {
 		}
 	}
 }
+
+// Captures the first session write, which ends the only collection pass that sees interfaces.
+type haSessionTestRepo struct {
+	*statisticsTestRepo
+	replaced chan []domain.HaPeerSession
+}
+
+func (r *haSessionTestRepo) ReplaceHaPeerSessions(ctx context.Context, nodeId string, s []domain.HaPeerSession) error {
+	err := r.statisticsTestRepo.ReplaceHaPeerSessions(ctx, nodeId, s)
+	select {
+	case r.replaced <- s:
+	default:
+	}
+	return err
+}
+
+func TestStatisticsHaNodeWritesSessions(t *testing.T) {
+	for _, active := range []bool{false, true} {
+		t.Run(map[bool]string{false: "standby", true: "active"}[active], func(t *testing.T) {
+			collector, db, _ := newStatisticsTestCollector(t)
+			collector.cfg.Ha.Role = config.HaRoleNode
+			collector.cfg.Ha.NodeId = "n1"
+			collector.SetActiveCheck(func() bool { return active })
+			collector.bus = statisticsTestBus{publish: func(string, ...any) {}}
+			repo := &haSessionTestRepo{statisticsTestRepo: collector.db.(*statisticsTestRepo),
+				replaced: make(chan []domain.HaPeerSession, 1)}
+			collector.db = repo
+			startStatisticsTestCollector(t, collector, "peer")
+
+			sessions := receiveStatisticsTest(t, repo.replaced)
+			require.Len(t, sessions, 1)
+			require.Equal(t, "n1", sessions[0].NodeId)
+			require.EqualValues(t, "peer", sessions[0].PeerIdentifier)
+			require.EqualValues(t, 42, sessions[0].BytesReceived)
+
+			var status domain.PeerStatus
+			require.NoError(t, db.First(&status, "identifier = ?", "peer").Error)
+			require.Equal(t, active, status.BytesReceived == 42, "peer_statuses written only by the active node")
+		})
+	}
+}

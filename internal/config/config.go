@@ -429,9 +429,7 @@ func applyHaRoleOverrides(cfg *Config) {
 		// the orchestrator has no WireGuard interfaces, nodes own the kernel state
 		cfg.Core.ImportExisting = false
 		cfg.Core.RestoreState = false
-		cfg.Statistics.CollectInterfaceData = false
-		cfg.Statistics.CollectPeerData = false
-		cfg.Statistics.UsePingChecks = false
+		// statistics stay enabled: they are read from the replicated DB, main.go does not start the collector loops
 	case HaRoleNode:
 		// nodes apply the replicated DB via the reconcile loop and must never write interface state on startup
 		cfg.Core.ImportExisting = false

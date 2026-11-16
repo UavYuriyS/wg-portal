@@ -3,6 +3,7 @@ package wireguard
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/h44z/wg-portal/internal/config"
 	"github.com/h44z/wg-portal/internal/domain"
@@ -78,6 +79,9 @@ func (f *mockDB) GetInterfaceAndPeers(ctx context.Context, id domain.InterfaceId
 	return f.iface, nil, nil
 }
 func (f *mockDB) GetPeersStats(ctx context.Context, ids ...domain.PeerIdentifier) ([]domain.PeerStatus, error) {
+	return nil, nil
+}
+func (f *mockDB) GetHaPeerSessions(ctx context.Context, nodeId string) ([]domain.HaPeerSession, error) {
 	return nil, nil
 }
 func (f *mockDB) GetAllInterfaces(ctx context.Context) ([]domain.Interface, error) {
@@ -319,5 +323,43 @@ func TestCreateDefaultPeer_RespectsInterfaceFlag(t *testing.T) {
 
 	if len(db.savedPeers) != 1 {
 		t.Fatalf("expected 1 peer to be created because interface flag is true, but got %d", len(db.savedPeers))
+	}
+}
+
+type haSessionMockDB struct {
+	*mockDB
+	sessions []domain.HaPeerSession
+}
+
+func (d haSessionMockDB) GetInterfaceAndPeers(context.Context, domain.InterfaceIdentifier) (
+	*domain.Interface,
+	[]domain.Peer,
+	error,
+) {
+	return d.iface, []domain.Peer{{Identifier: "fresh"}, {Identifier: "stale"}}, nil
+}
+func (d haSessionMockDB) GetHaPeerSessions(context.Context, string) ([]domain.HaPeerSession, error) {
+	return d.sessions, nil
+}
+
+func TestGetPeerStats_NodeSkipsStaleAndForeignSessions(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Statistics.DataCollectionInterval = time.Minute
+	cfg.Backend.ReKeyTimeoutInterval = 3 * time.Minute
+	now := time.Now()
+	old := now.Add(-time.Hour)
+	m := Manager{cfg: cfg, db: haSessionMockDB{mockDB: &mockDB{}, sessions: []domain.HaPeerSession{
+		{NodeId: "n1", PeerIdentifier: "fresh", LastHandshake: &now, UpdatedAt: now, BytesReceived: 7},
+		{NodeId: "n1", PeerIdentifier: "stale", LastHandshake: &old, UpdatedAt: old},
+		{NodeId: "n1", PeerIdentifier: "other-interface", LastHandshake: &now, UpdatedAt: now},
+	}}}
+	ctx := domain.SetUserInfo(context.Background(), domain.SystemAdminContextUserInfo())
+
+	stats, err := m.GetPeerStats(ctx, "wg0", "n1")
+	if err != nil {
+		t.Fatalf("GetPeerStats returned error: %v", err)
+	}
+	if len(stats) != 1 || stats[0].PeerId != "fresh" || !stats[0].IsConnected || stats[0].BytesReceived != 7 {
+		t.Fatalf("expected only the fresh connected session, got %+v", stats)
 	}
 }

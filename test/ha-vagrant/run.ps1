@@ -238,6 +238,24 @@ Wait-For 60 'linux client egress via node-a (real NAT)' { (Egress-Linux) -eq '19
 if ($clients -contains 'win') { Wait-For 120 'windows client egress via node-a' { (Egress-Win) -eq '192.168.77.11' } }
 
 if (-not $SkipHa) {
+    Log 'CONNECTIONS: the orchestrator shows the replicated statuses and the sessions each node sees'
+    # parentheses: Invoke-RestMethod pipes a JSON array as one object
+    $linuxId = ((Invoke-RestMethod "$api/peer/by-interface/wg0" -Headers $auth) | Where-Object DisplayName -eq 'client-linux').Identifier
+    if (-not $linuxId) { Fail 'peer client-linux missing' }
+    # d2cw = base64url("wg0"); stats are keyed by the peer identifier
+    function LinuxStat($query = '') {
+        $s = V0 GET "/peer/iface/d2cw/stats$query"
+        if (-not $s.Enabled) { return $null }
+        $s.Stats.PSObject.Properties[$linuxId].Value
+    }
+    # 1m data collection interval: sessions and statuses need up to one tick
+    Wait-For 90 'orchestrator: stats enabled, linux client connected' { (LinuxStat).IsConnected -eq $true }
+    Wait-For 90 'node-a sees the linux client' { (LinuxStat '?node=node-a').IsConnected -eq $true }
+    # a handshake from an earlier run ages out after the 180s rekey timeout
+    Wait-For 240 'node-b does not see the linux client' { -not (LinuxStat '?node=node-b') }
+    Wait-For 90 '/ha/status: node-a has connected peers' {
+        ((V0 GET '/ha/status').Nodes | Where-Object NodeId -eq 'node-a').ConnectedPeers -ge 1 }
+
     Log 'FAILOVER: node-a gets blacklisted (it drops all incoming WireGuard traffic)'
     # blocked on the node itself: a Windows Firewall rule on the client does not stop WireGuard for Windows
     Vssh node-a 'sudo iptables -t raw -I PREROUTING -p udp --dport 51820 -j DROP' | Out-Null

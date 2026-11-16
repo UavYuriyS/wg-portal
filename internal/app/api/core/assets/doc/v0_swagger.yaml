@@ -69,6 +69,89 @@ definitions:
       time.Time:
         type: string
     type: object
+  model.HaExitCheck:
+    properties:
+      At:
+        type: string
+      ExpectedIp:
+        type: string
+      Ok:
+        type: boolean
+      Result:
+        type: string
+    type: object
+  model.HaJoinToken:
+    properties:
+      CreatedAt:
+        type: string
+      CreatedBy:
+        type: string
+      ExpiresAt:
+        type: string
+      Id:
+        type: string
+      UsesLeft:
+        type: integer
+    type: object
+  model.HaJoinTokenRequest:
+    properties:
+      Uses:
+        type: integer
+      ValidHours:
+        type: integer
+    type: object
+  model.HaJoinTokenResponse:
+    properties:
+      Token:
+        type: string
+    type: object
+  model.HaNode:
+    properties:
+      ConnectedPeers:
+        description: fresh sessions seen by this node, HA probe peers excluded
+        type: integer
+      ConsecutiveFails:
+        type: integer
+      IsActive:
+        type: boolean
+      LastHeartbeat:
+        type: string
+      LastProbeAt:
+        type: string
+      LastProbeOk:
+        type: boolean
+      LastProbeResult:
+        type: string
+      NodeId:
+        type: string
+      Priority:
+        type: integer
+      PublicIp:
+        type: string
+      RegisteredAt:
+        type: string
+    type: object
+  model.HaStatus:
+    properties:
+      ActiveNodeId:
+        type: string
+      ChangedAt:
+        type: string
+      ChangedBy:
+        type: string
+      ExitCheck:
+        $ref: '#/definitions/model.HaExitCheck'
+      JoinTokens:
+        items:
+          $ref: '#/definitions/model.HaJoinToken'
+        type: array
+      Nodes:
+        items:
+          $ref: '#/definitions/model.HaNode'
+        type: array
+      Role:
+        type: string
+    type: object
   model.Interface:
     properties:
       Addresses:
@@ -80,6 +163,9 @@ definitions:
         description: the backend used for this interface e.g., local, mikrotik, ...
         example: local
         type: string
+      CreateDefaultPeer:
+        description: if true, default peers will be created for this interface
+        type: boolean
       Disabled:
         description: flag that specifies if the interface is enabled (up) or not (down)
         type: boolean
@@ -113,6 +199,9 @@ definitions:
         description: 'device name, for example: wg0'
         example: wg0
         type: string
+      IsDynamic:
+        description: specifies if the interface is a dynamic object
+        type: boolean
       ListenPort:
         description: 'the listening port, for example: 51820'
         type: integer
@@ -215,6 +304,13 @@ definitions:
         example: /auth/google/login
         type: string
     type: object
+  model.LogoutResponse:
+    properties:
+      Message:
+        type: string
+      RedirectUrl:
+        type: string
+    type: object
   model.MultiPeerRequest:
     properties:
       Identifiers:
@@ -288,6 +384,9 @@ definitions:
       InterfaceIdentifier:
         description: the interface id
         type: string
+      IsDynamic:
+        description: specifies if the peer is dynamically created by mikrotik
+        type: boolean
       Mode:
         description: the peer interface type (server, client, any)
         type: string
@@ -380,8 +479,92 @@ definitions:
         description: stats, map key = Peer identifier
         type: object
     type: object
+  model.RoutingActiveExitRequest:
+    properties:
+      PeerIdentifier:
+        description: 'empty: no exit'
+        type: string
+    type: object
+  model.RoutingExitCandidate:
+    properties:
+      DisplayName:
+        type: string
+      EgressIp:
+        type: string
+      PeerIdentifier:
+        type: string
+    type: object
+  model.RoutingExitCandidateRequest:
+    properties:
+      EgressIp:
+        type: string
+      PeerIdentifier:
+        type: string
+    type: object
+  model.RoutingExitInterface:
+    properties:
+      ActivePeerIdentifier:
+        description: 'empty: no exit active'
+        type: string
+      Candidates:
+        items:
+          $ref: '#/definitions/model.RoutingExitCandidate'
+        type: array
+      Detected:
+        description: 'Detected: peers with 0.0.0.0/0 or ::/0 that are no candidates
+          (EgressIp empty)'
+        items:
+          $ref: '#/definitions/model.RoutingExitCandidate'
+        type: array
+      InterfaceIdentifier:
+        type: string
+    type: object
+  model.RoutingList:
+    properties:
+      Content:
+        description: only in GET /routing/lists/{id}
+        type: string
+      Enabled:
+        type: boolean
+      EntryCount:
+        type: integer
+      Id:
+        type: string
+      Kind:
+        description: blackhole or bypass
+        type: string
+      Name:
+        type: string
+      UpdatedAt:
+        type: string
+      UpdatedBy:
+        type: string
+    type: object
+  model.RoutingListRequest:
+    properties:
+      Content:
+        description: 'omitted or null on PUT: keep the current content'
+        type: string
+      Enabled:
+        type: boolean
+      Kind:
+        type: string
+      Name:
+        type: string
+    type: object
+  model.RoutingSettings:
+    properties:
+      DnsForwarderEnabled:
+        type: boolean
+      DnsUpstreams:
+        items:
+          type: string
+        type: array
+    type: object
   model.SessionInfo:
     properties:
+      DefaultPasswordInUse:
+        type: boolean
       IsAdmin:
         type: boolean
       LoggedIn:
@@ -403,6 +586,8 @@ definitions:
         items:
           $ref: '#/definitions/model.SettingsBackendNames'
         type: array
+      CreateDefaultPeer:
+        type: boolean
       EditableKeys:
         type: boolean
       LoginFormVisible:
@@ -424,6 +609,8 @@ definitions:
         type: string
       Name:
         type: string
+      Type:
+        type: string
     type: object
   model.User:
     properties:
@@ -437,6 +624,8 @@ definitions:
         items:
           type: string
         type: array
+      DefaultPasswordInUse:
+        type: boolean
       Department:
         type: string
       Disabled:
@@ -563,7 +752,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/model.Error'
+            $ref: '#/definitions/model.LogoutResponse'
       summary: Get all available external login providers.
       tags:
       - Authentication
@@ -738,6 +927,84 @@ paths:
       summary: Get a CSRF token for the current session.
       tags:
       - Security
+  /ha/join-tokens:
+    post:
+      operationId: ha_handleJoinTokenPost
+      parameters:
+      - description: Validity and number of uses
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.HaJoinTokenRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.HaJoinTokenResponse'
+      summary: Create a node join token.
+      tags:
+      - HA
+  /ha/join-tokens/{id}:
+    delete:
+      operationId: ha_handleJoinTokenDelete
+      parameters:
+      - description: The token id
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No content
+      summary: Revoke a node join token.
+      tags:
+      - HA
+  /ha/nodes/{id}:
+    delete:
+      operationId: ha_handleNodeDelete
+      parameters:
+      - description: The node id
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No content
+      summary: Remove a (non-active) node from the cluster.
+      tags:
+      - HA
+  /ha/promote/{id}:
+    post:
+      operationId: ha_handlePromotePost
+      parameters:
+      - description: The node id
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No content
+      summary: Promote a node to be the active node and point DNS at it.
+      tags:
+      - HA
+  /ha/status:
+    get:
+      operationId: ha_handleStatusGet
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.HaStatus'
+      summary: Get the HA cluster status (nodes, active node, join tokens).
+      tags:
+      - HA
   /hostname:
     get:
       description: Nothing more to describe...
@@ -842,6 +1109,31 @@ paths:
           schema:
             $ref: '#/definitions/model.Error'
       summary: Apply all peer defaults to the available peers.
+      tags:
+      - Interface
+  /interface/{id}/create-default-peers:
+    post:
+      operationId: interfaces_handleCreateDefaultPeersPost
+      parameters:
+      - description: The interface identifier
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No content if creating the default peers was successful
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/model.Error'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/model.Error'
+      summary: Create default peers for all existing users on the given interface.
       tags:
       - Interface
   /interface/{id}/save-config:
@@ -1399,6 +1691,11 @@ paths:
         name: iface
         required: true
         type: string
+      - description: 'HA node id: the sessions that node''s kernel sees instead of
+          the active node''s'
+        in: query
+        name: node
+        type: string
       produces:
       - application/json
       responses:
@@ -1417,6 +1714,198 @@ paths:
       summary: Get peer stats for the given interface.
       tags:
       - Peer
+  /routing/exits:
+    get:
+      operationId: routing_handleExitsGet
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.RoutingExitInterface'
+            type: array
+      summary: Get the exit node configuration of all server interfaces.
+      tags:
+      - Routing
+  /routing/exits/{iface}/active:
+    put:
+      operationId: routing_handleActivePut
+      parameters:
+      - description: The interface identifier
+        in: path
+        name: iface
+        required: true
+        type: string
+      - description: The exit candidate
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.RoutingActiveExitRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.RoutingExitInterface'
+      summary: 'Select the active exit node of an interface (empty PeerIdentifier:
+        none).'
+      tags:
+      - Routing
+  /routing/exits/{iface}/candidates:
+    put:
+      operationId: routing_handleCandidatesPut
+      parameters:
+      - description: The interface identifier
+        in: path
+        name: iface
+        required: true
+        type: string
+      - description: The candidates
+        in: body
+        name: request
+        required: true
+        schema:
+          items:
+            $ref: '#/definitions/model.RoutingExitCandidateRequest'
+          type: array
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.RoutingExitInterface'
+      summary: Replace the exit candidates of an interface; removing the active exit
+        deactivates it.
+      tags:
+      - Routing
+  /routing/lists:
+    get:
+      operationId: routing_handleListsGet
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.RoutingList'
+            type: array
+      summary: Get all bypass and blackhole lists (without content).
+      tags:
+      - Routing
+    post:
+      operationId: routing_handleListSave
+      parameters:
+      - description: The list
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.RoutingListRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.RoutingList'
+      summary: Create or update a bypass or blackhole list.
+      tags:
+      - Routing
+  /routing/lists/{id}:
+    delete:
+      operationId: routing_handleListDelete
+      parameters:
+      - description: The list id
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No content
+      summary: Delete a bypass or blackhole list.
+      tags:
+      - Routing
+    get:
+      operationId: routing_handleListGet
+      parameters:
+      - description: The list id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.RoutingList'
+      summary: Get a bypass or blackhole list with its content.
+      tags:
+      - Routing
+    put:
+      operationId: routing_handleListSave
+      parameters:
+      - description: The list id (PUT only)
+        in: path
+        name: id
+        type: string
+      - description: The list
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.RoutingListRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.RoutingList'
+      summary: Create or update a bypass or blackhole list.
+      tags:
+      - Routing
+  /routing/settings:
+    get:
+      operationId: routing_handleSettingsGet
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.RoutingSettings'
+      summary: Get the DNS forwarder settings.
+      tags:
+      - Routing
+    put:
+      operationId: routing_handleSettingsPut
+      parameters:
+      - description: The settings
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.RoutingSettings'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.RoutingSettings'
+      summary: Update the DNS forwarder settings (upstreams as host[:port], tried
+        in order).
+      tags:
+      - Routing
   /user/{id}:
     delete:
       operationId: users_handleDelete

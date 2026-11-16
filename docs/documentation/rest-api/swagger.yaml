@@ -1,5 +1,126 @@
 basePath: /api/v1
 definitions:
+    domain.HaJoinToken:
+        properties:
+            CreatedAt:
+                type: string
+            CreatedBy:
+                type: string
+            ExpiresAt:
+                type: string
+            Id:
+                description: short public id, shown in the UI
+                type: string
+            UsesLeft:
+                type: integer
+        type: object
+    domain.HaNode:
+        properties:
+            ConsecutiveFails:
+                type: integer
+            LastHeartbeat:
+                type: string
+            LastProbeAt:
+                type: string
+            LastProbeOk:
+                type: boolean
+            LastProbeResult:
+                description: observed egress IP or the probe error
+                type: string
+            NodeId:
+                type: string
+            Priority:
+                type: integer
+            PublicIp:
+                type: string
+            RegisteredAt:
+                type: string
+        type: object
+    domain.HaState:
+        properties:
+            ActiveNodeId:
+                type: string
+            ChangedAt:
+                type: string
+            ChangedBy:
+                type: string
+            ExitCheckAt:
+                description: informational check of the active exit node, through the active node; never triggers a failover
+                type: string
+            ExitCheckExpectedIp:
+                description: EgressIp of the active exit candidate at check time
+                type: string
+            ExitCheckOk:
+                type: boolean
+            ExitCheckResult:
+                description: observed egress IP or the probe error
+                type: string
+            Id:
+                type: integer
+        type: object
+    ha.RegisterRequest:
+        properties:
+            NodeId:
+                type: string
+            Priority:
+                type: integer
+            PublicIp:
+                type: string
+        type: object
+    ha.RegisterResponse:
+        properties:
+            CaCert:
+                type: string
+            Cert:
+                type: string
+            ClusterAddresses:
+                items:
+                    type: string
+                type: array
+            ClusterName:
+                type: string
+            DatabaseDsn:
+                type: string
+            EncryptionPassphrase:
+                type: string
+            Key:
+                type: string
+            ListenPorts:
+                items:
+                    type: integer
+                type: array
+            NodeId:
+                type: string
+            SstPassword:
+                type: string
+            SstUser:
+                type: string
+        type: object
+    ha.Status:
+        properties:
+            ConnectedPeers:
+                additionalProperties:
+                    type: integer
+                description: ConnectedPeers counts the fresh, connected sessions per node id, HA probe peers excluded.
+                type: object
+            Nodes:
+                items:
+                    $ref: '#/definitions/domain.HaNode'
+                type: array
+            State:
+                $ref: '#/definitions/domain.HaState'
+            Tokens:
+                items:
+                    $ref: '#/definitions/domain.HaJoinToken'
+                type: array
+        type: object
+    handlers.haJoinTokenRequest:
+        properties:
+            Uses:
+                type: integer
+            ValidHours:
+                type: integer
+        type: object
     models.ConfigOption-array_string:
         properties:
             Overridable:
@@ -607,6 +728,91 @@ info:
     title: WireGuard Portal Public API
     version: "1.0"
 paths:
+    /ha/join-tokens:
+        post:
+            operationId: ha_handleJoinTokenPost
+            parameters:
+                - description: Validity in hours (default 24) and number of uses (default 1)
+                  in: body
+                  name: request
+                  required: true
+                  schema:
+                    $ref: '#/definitions/handlers.haJoinTokenRequest'
+            produces:
+                - application/json
+            responses:
+                "200":
+                    description: OK
+                    schema:
+                        additionalProperties:
+                            type: string
+                        type: object
+            security:
+                - BasicAuth: []
+            summary: Create a node join token.
+            tags:
+                - HA
+    /ha/promote/{id}:
+        post:
+            operationId: ha_handlePromotePost
+            parameters:
+                - description: The node id
+                  in: path
+                  name: id
+                  required: true
+                  type: string
+            responses:
+                "204":
+                    description: No content
+            security:
+                - BasicAuth: []
+            summary: Promote a node to be the active node.
+            tags:
+                - HA
+    /ha/register:
+        post:
+            operationId: ha_handleRegisterPost
+            parameters:
+                - description: Bearer <join token>
+                  in: header
+                  name: Authorization
+                  required: true
+                  type: string
+                - description: The node
+                  in: body
+                  name: request
+                  required: true
+                  schema:
+                    $ref: '#/definitions/ha.RegisterRequest'
+            produces:
+                - application/json
+            responses:
+                "200":
+                    description: OK
+                    schema:
+                        $ref: '#/definitions/ha.RegisterResponse'
+                "401":
+                    description: Unauthorized
+                    schema:
+                        $ref: '#/definitions/models.Error'
+            summary: Register an HA node (used by "wg-portal -ha-init").
+            tags:
+                - HA
+    /ha/status:
+        get:
+            operationId: ha_handleStatusGet
+            produces:
+                - application/json
+            responses:
+                "200":
+                    description: OK
+                    schema:
+                        $ref: '#/definitions/ha.Status'
+            security:
+                - BasicAuth: []
+            summary: Get the HA cluster status.
+            tags:
+                - HA
     /interface/all:
         get:
             operationId: interface_handleAllGet
@@ -760,7 +966,7 @@ paths:
         post:
             description: |-
                 This endpoint creates a new interface with the provided data. All required fields must be filled (e.g. name, private key, public key, ...).
-                Backend must be a configured backend ID. When omitted, the local backend is used. CreateDefaultPeer defaults to false when omitted, preserving legacy create behavior.
+                Backend must be a configured backend ID. When omitted, the local backend is used.
             operationId: interfaces_handleCreatePost
             parameters:
                 - description: The interface data.

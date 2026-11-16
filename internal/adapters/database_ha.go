@@ -127,4 +127,28 @@ func (r *SqlRepo) SaveHaProbePeer(ctx context.Context, probe *domain.HaProbePeer
 	return r.db.WithContext(ctx).Save(probe).Error
 }
 
+// ReplaceHaPeerSessions replaces all sessions of the node in one transaction.
+func (r *SqlRepo) ReplaceHaPeerSessions(ctx context.Context, nodeId string, sessions []domain.HaPeerSession) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Delete(&domain.HaPeerSession{}, "node_id = ?", nodeId).Error; err != nil {
+			return err
+		}
+		if len(sessions) == 0 {
+			return nil
+		}
+		return tx.Create(&sessions).Error
+	})
+}
+
+// GetHaPeerSessions returns the sessions of one node, or of all nodes for an empty nodeId.
+func (r *SqlRepo) GetHaPeerSessions(ctx context.Context, nodeId string) ([]domain.HaPeerSession, error) {
+	var sessions []domain.HaPeerSession
+	q := r.db.WithContext(ctx)
+	if nodeId != "" {
+		q = q.Where("node_id = ?", nodeId)
+	}
+	err := q.Find(&sessions).Error
+	return sessions, err
+}
+
 // endregion ha

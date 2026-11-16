@@ -56,3 +56,28 @@ type HaProbePeer struct {
 func (s HaState) ExpectedEgressIp(node HaNode) string {
 	return node.PublicIp
 }
+
+// HaPeerSession is a connected peer as seen by the kernel of one HA node (active or standby). Each node
+// replaces its own rows every statistics tick, so stale rows mean the node stopped reporting.
+type HaPeerSession struct {
+	NodeId           string         `gorm:"primaryKey"`
+	PeerIdentifier   PeerIdentifier `gorm:"primaryKey"`
+	LastHandshake    *time.Time
+	Endpoint         string
+	BytesReceived    uint64
+	BytesTransmitted uint64
+	UpdatedAt        time.Time
+}
+
+// Fresh reports whether the node refreshed the row within 3 collection intervals; rows of dead nodes are not.
+func (s HaPeerSession) Fresh(collectionInterval time.Duration) bool {
+	return time.Since(s.UpdatedAt) <= 3*collectionInterval
+}
+
+// PeerStatus converts the session, IsConnected follows the handshake.
+func (s HaPeerSession) PeerStatus(rekeyTimeout time.Duration) PeerStatus {
+	ps := PeerStatus{PeerId: s.PeerIdentifier, UpdatedAt: s.UpdatedAt, LastHandshake: s.LastHandshake,
+		Endpoint: s.Endpoint, BytesReceived: s.BytesReceived, BytesTransmitted: s.BytesTransmitted}
+	ps.CalcConnected(rekeyTimeout)
+	return ps
+}

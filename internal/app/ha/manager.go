@@ -41,6 +41,8 @@ type Repo interface {
 	ConsumeHaJoinToken(ctx context.Context, tokenHash string, now time.Time) error
 	GetHaProbePeers(ctx context.Context) ([]domain.HaProbePeer, error)
 	SaveHaProbePeer(ctx context.Context, probe *domain.HaProbePeer) error
+	GetHaPeerSessions(ctx context.Context, nodeId string) ([]domain.HaPeerSession, error)
+	ReplaceHaPeerSessions(ctx context.Context, nodeId string, sessions []domain.HaPeerSession) error
 
 	GetAllInterfaces(ctx context.Context) ([]domain.Interface, error)
 	GetPeer(ctx context.Context, id domain.PeerIdentifier) (*domain.Peer, error)
@@ -495,6 +497,8 @@ type Status struct {
 	State  domain.HaState
 	Nodes  []domain.HaNode
 	Tokens []domain.HaJoinToken
+	// ConnectedPeers counts the fresh, connected sessions per node id, HA probe peers excluded.
+	ConnectedPeers map[string]int
 }
 
 func (m *Manager) GetStatus(ctx context.Context) (*Status, error) {
@@ -510,7 +514,33 @@ func (m *Manager) GetStatus(ctx context.Context) (*Status, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Status{State: *state, Nodes: nodes, Tokens: tokens}, nil
+	connected, err := m.connectedPeers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &Status{State: *state, Nodes: nodes, Tokens: tokens, ConnectedPeers: connected}, nil
+}
+
+func (m *Manager) connectedPeers(ctx context.Context) (map[string]int, error) {
+	probes, err := m.repo.GetHaProbePeers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	sessions, err := m.repo.GetHaPeerSessions(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	connected := make(map[string]int)
+	for _, s := range sessions {
+		isProbe := slices.ContainsFunc(probes, func(p domain.HaProbePeer) bool {
+			return p.PeerIdentifier == s.PeerIdentifier || p.ExitPeerIdentifier == s.PeerIdentifier
+		})
+		if !isProbe && s.Fresh(m.cfg.Statistics.DataCollectionInterval) &&
+			s.PeerStatus(m.cfg.Backend.ReKeyTimeoutInterval).IsConnected {
+			connected[s.NodeId]++
+		}
+	}
+	return connected, nil
 }
 
 func (m *Manager) RemoveNode(ctx context.Context, nodeId string) error {
@@ -521,7 +551,10 @@ func (m *Manager) RemoveNode(ctx context.Context, nodeId string) error {
 	if state.ActiveNodeId == nodeId {
 		return fmt.Errorf("%w: promote another node before removing the active one", domain.ErrInvalidData)
 	}
-	return m.repo.DeleteHaNode(ctx, nodeId)
+	if err := m.repo.DeleteHaNode(ctx, nodeId); err != nil {
+		return err
+	}
+	return m.repo.ReplaceHaPeerSessions(ctx, nodeId, nil)
 }
 
 // CreateJoinToken returns the clear text token; only its hash is stored.

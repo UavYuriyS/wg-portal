@@ -13,6 +13,7 @@ export const peerStore = defineStore('peers', {
     peers: [],
     stats: {},
     statsEnabled: false,
+    statsNode: "", // HA node whose kernel sessions are shown, empty for the active node's statuses
     peer: freshPeer(),
     prepared: freshPeer(),
     configuration: "",
@@ -199,7 +200,8 @@ export const peerStore = defineStore('peers', {
       }
       this.fetching = true
 
-      return apiWrapper.get(`${baseUrl}/iface/${base64_url_encode(interfaceId)}/stats`)
+      const nodeQuery = this.statsNode ? `?node=${encodeURIComponent(this.statsNode)}` : ''
+      return apiWrapper.get(`${baseUrl}/iface/${base64_url_encode(interfaceId)}/stats${nodeQuery}`)
         .then(this.setStats)
         .catch(error => {
           this.setStats(undefined)

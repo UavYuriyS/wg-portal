@@ -15,6 +15,142 @@
     },
     "basePath": "/api/v1",
     "paths": {
+        "/ha/join-tokens": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "HA"
+                ],
+                "summary": "Create a node join token.",
+                "operationId": "ha_handleJoinTokenPost",
+                "parameters": [
+                    {
+                        "description": "Validity in hours (default 24) and number of uses (default 1)",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.haJoinTokenRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "BasicAuth": []
+                    }
+                ]
+            }
+        },
+        "/ha/promote/{id}": {
+            "post": {
+                "tags": [
+                    "HA"
+                ],
+                "summary": "Promote a node to be the active node.",
+                "operationId": "ha_handlePromotePost",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "The node id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No content"
+                    }
+                },
+                "security": [
+                    {
+                        "BasicAuth": []
+                    }
+                ]
+            }
+        },
+        "/ha/register": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "HA"
+                ],
+                "summary": "Register an HA node (used by \"wg-portal -ha-init\").",
+                "operationId": "ha_handleRegisterPost",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bearer \u003cjoin token\u003e",
+                        "name": "Authorization",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "The node",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/ha.RegisterRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/ha.RegisterResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.Error"
+                        }
+                    }
+                }
+            }
+        },
+        "/ha/status": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "HA"
+                ],
+                "summary": "Get the HA cluster status.",
+                "operationId": "ha_handleStatusGet",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/ha.Status"
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "BasicAuth": []
+                    }
+                ]
+            }
+        },
         "/interface/all": {
             "get": {
                 "produces": [
@@ -246,7 +382,7 @@
         },
         "/interface/new": {
             "post": {
-                "description": "This endpoint creates a new interface with the provided data. All required fields must be filled (e.g. name, private key, public key, ...).\nBackend must be a configured backend ID. When omitted, the local backend is used. CreateDefaultPeer defaults to false when omitted, preserving legacy create behavior.",
+                "description": "This endpoint creates a new interface with the provided data. All required fields must be filled (e.g. name, private key, public key, ...).\nBackend must be a configured backend ID. When omitted, the local backend is used.",
                 "produces": [
                     "application/json"
                 ],
@@ -1518,6 +1654,188 @@
         }
     },
     "definitions": {
+        "domain.HaJoinToken": {
+            "type": "object",
+            "properties": {
+                "CreatedAt": {
+                    "type": "string"
+                },
+                "CreatedBy": {
+                    "type": "string"
+                },
+                "ExpiresAt": {
+                    "type": "string"
+                },
+                "Id": {
+                    "description": "short public id, shown in the UI",
+                    "type": "string"
+                },
+                "UsesLeft": {
+                    "type": "integer"
+                }
+            }
+        },
+        "domain.HaNode": {
+            "type": "object",
+            "properties": {
+                "ConsecutiveFails": {
+                    "type": "integer"
+                },
+                "LastHeartbeat": {
+                    "type": "string"
+                },
+                "LastProbeAt": {
+                    "type": "string"
+                },
+                "LastProbeOk": {
+                    "type": "boolean"
+                },
+                "LastProbeResult": {
+                    "description": "observed egress IP or the probe error",
+                    "type": "string"
+                },
+                "NodeId": {
+                    "type": "string"
+                },
+                "Priority": {
+                    "type": "integer"
+                },
+                "PublicIp": {
+                    "type": "string"
+                },
+                "RegisteredAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "domain.HaState": {
+            "type": "object",
+            "properties": {
+                "ActiveNodeId": {
+                    "type": "string"
+                },
+                "ChangedAt": {
+                    "type": "string"
+                },
+                "ChangedBy": {
+                    "type": "string"
+                },
+                "ExitCheckAt": {
+                    "description": "informational check of the active exit node, through the active node; never triggers a failover",
+                    "type": "string"
+                },
+                "ExitCheckExpectedIp": {
+                    "description": "EgressIp of the active exit candidate at check time",
+                    "type": "string"
+                },
+                "ExitCheckOk": {
+                    "type": "boolean"
+                },
+                "ExitCheckResult": {
+                    "description": "observed egress IP or the probe error",
+                    "type": "string"
+                },
+                "Id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "ha.RegisterRequest": {
+            "type": "object",
+            "properties": {
+                "NodeId": {
+                    "type": "string"
+                },
+                "Priority": {
+                    "type": "integer"
+                },
+                "PublicIp": {
+                    "type": "string"
+                }
+            }
+        },
+        "ha.RegisterResponse": {
+            "type": "object",
+            "properties": {
+                "CaCert": {
+                    "type": "string"
+                },
+                "Cert": {
+                    "type": "string"
+                },
+                "ClusterAddresses": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "ClusterName": {
+                    "type": "string"
+                },
+                "DatabaseDsn": {
+                    "type": "string"
+                },
+                "EncryptionPassphrase": {
+                    "type": "string"
+                },
+                "Key": {
+                    "type": "string"
+                },
+                "ListenPorts": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "NodeId": {
+                    "type": "string"
+                },
+                "SstPassword": {
+                    "type": "string"
+                },
+                "SstUser": {
+                    "type": "string"
+                }
+            }
+        },
+        "ha.Status": {
+            "type": "object",
+            "properties": {
+                "ConnectedPeers": {
+                    "description": "ConnectedPeers counts the fresh, connected sessions per node id, HA probe peers excluded.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "Nodes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/domain.HaNode"
+                    }
+                },
+                "State": {
+                    "$ref": "#/definitions/domain.HaState"
+                },
+                "Tokens": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/domain.HaJoinToken"
+                    }
+                }
+            }
+        },
+        "handlers.haJoinTokenRequest": {
+            "type": "object",
+            "properties": {
+                "Uses": {
+                    "type": "integer"
+                },
+                "ValidHours": {
+                    "type": "integer"
+                }
+            }
+        },
         "models.ConfigOption-array_string": {
             "type": "object",
             "properties": {

@@ -117,7 +117,7 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/model.Error"
+                            "$ref": "#/definitions/model.LogoutResponse"
                         }
                     }
                 }
@@ -379,6 +379,126 @@
                         "description": "OK",
                         "schema": {
                             "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/ha/join-tokens": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "HA"
+                ],
+                "summary": "Create a node join token.",
+                "operationId": "ha_handleJoinTokenPost",
+                "parameters": [
+                    {
+                        "description": "Validity and number of uses",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.HaJoinTokenRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.HaJoinTokenResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/ha/join-tokens/{id}": {
+            "delete": {
+                "tags": [
+                    "HA"
+                ],
+                "summary": "Revoke a node join token.",
+                "operationId": "ha_handleJoinTokenDelete",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "The token id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No content"
+                    }
+                }
+            }
+        },
+        "/ha/nodes/{id}": {
+            "delete": {
+                "tags": [
+                    "HA"
+                ],
+                "summary": "Remove a (non-active) node from the cluster.",
+                "operationId": "ha_handleNodeDelete",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "The node id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No content"
+                    }
+                }
+            }
+        },
+        "/ha/promote/{id}": {
+            "post": {
+                "tags": [
+                    "HA"
+                ],
+                "summary": "Promote a node to be the active node and point DNS at it.",
+                "operationId": "ha_handlePromotePost",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "The node id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No content"
+                    }
+                }
+            }
+        },
+        "/ha/status": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "HA"
+                ],
+                "summary": "Get the HA cluster status (nodes, active node, join tokens).",
+                "operationId": "ha_handleStatusGet",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.HaStatus"
                         }
                     }
                 }
@@ -719,6 +839,44 @@
                 "responses": {
                     "204": {
                         "description": "No content if applying peer defaults was successful"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/model.Error"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/model.Error"
+                        }
+                    }
+                }
+            }
+        },
+        "/interface/{id}/create-default-peers": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Interface"
+                ],
+                "summary": "Create default peers for all existing users on the given interface.",
+                "operationId": "interfaces_handleCreateDefaultPeersPost",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "The interface identifier",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No content if creating the default peers was successful"
                     },
                     "400": {
                         "description": "Bad Request",
@@ -1266,6 +1424,12 @@
                         "name": "iface",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "HA node id: the sessions that node's kernel sees instead of the active node's",
+                        "name": "node",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1410,6 +1574,294 @@
                         "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/model.Error"
+                        }
+                    }
+                }
+            }
+        },
+        "/routing/exits": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Routing"
+                ],
+                "summary": "Get the exit node configuration of all server interfaces.",
+                "operationId": "routing_handleExitsGet",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.RoutingExitInterface"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/routing/exits/{iface}/active": {
+            "put": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Routing"
+                ],
+                "summary": "Select the active exit node of an interface (empty PeerIdentifier: none).",
+                "operationId": "routing_handleActivePut",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "The interface identifier",
+                        "name": "iface",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "The exit candidate",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.RoutingActiveExitRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.RoutingExitInterface"
+                        }
+                    }
+                }
+            }
+        },
+        "/routing/exits/{iface}/candidates": {
+            "put": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Routing"
+                ],
+                "summary": "Replace the exit candidates of an interface; removing the active exit deactivates it.",
+                "operationId": "routing_handleCandidatesPut",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "The interface identifier",
+                        "name": "iface",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "The candidates",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.RoutingExitCandidateRequest"
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.RoutingExitInterface"
+                        }
+                    }
+                }
+            }
+        },
+        "/routing/lists": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Routing"
+                ],
+                "summary": "Get all bypass and blackhole lists (without content).",
+                "operationId": "routing_handleListsGet",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.RoutingList"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Routing"
+                ],
+                "summary": "Create or update a bypass or blackhole list.",
+                "operationId": "routing_handleListSave",
+                "parameters": [
+                    {
+                        "description": "The list",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.RoutingListRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.RoutingList"
+                        }
+                    }
+                }
+            }
+        },
+        "/routing/lists/{id}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Routing"
+                ],
+                "summary": "Get a bypass or blackhole list with its content.",
+                "operationId": "routing_handleListGet",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "The list id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.RoutingList"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Routing"
+                ],
+                "summary": "Create or update a bypass or blackhole list.",
+                "operationId": "routing_handleListSave",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "The list id (PUT only)",
+                        "name": "id",
+                        "in": "path"
+                    },
+                    {
+                        "description": "The list",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.RoutingListRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.RoutingList"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "tags": [
+                    "Routing"
+                ],
+                "summary": "Delete a bypass or blackhole list.",
+                "operationId": "routing_handleListDelete",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "The list id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No content"
+                    }
+                }
+            }
+        },
+        "/routing/settings": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Routing"
+                ],
+                "summary": "Get the DNS forwarder settings.",
+                "operationId": "routing_handleSettingsGet",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.RoutingSettings"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Routing"
+                ],
+                "summary": "Update the DNS forwarder settings (upstreams as host[:port], tried in order).",
+                "operationId": "routing_handleSettingsPut",
+                "parameters": [
+                    {
+                        "description": "The settings",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.RoutingSettings"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.RoutingSettings"
                         }
                     }
                 }
@@ -2140,6 +2592,133 @@
                 }
             }
         },
+        "model.HaExitCheck": {
+            "type": "object",
+            "properties": {
+                "At": {
+                    "type": "string"
+                },
+                "ExpectedIp": {
+                    "type": "string"
+                },
+                "Ok": {
+                    "type": "boolean"
+                },
+                "Result": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.HaJoinToken": {
+            "type": "object",
+            "properties": {
+                "CreatedAt": {
+                    "type": "string"
+                },
+                "CreatedBy": {
+                    "type": "string"
+                },
+                "ExpiresAt": {
+                    "type": "string"
+                },
+                "Id": {
+                    "type": "string"
+                },
+                "UsesLeft": {
+                    "type": "integer"
+                }
+            }
+        },
+        "model.HaJoinTokenRequest": {
+            "type": "object",
+            "properties": {
+                "Uses": {
+                    "type": "integer"
+                },
+                "ValidHours": {
+                    "type": "integer"
+                }
+            }
+        },
+        "model.HaJoinTokenResponse": {
+            "type": "object",
+            "properties": {
+                "Token": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.HaNode": {
+            "type": "object",
+            "properties": {
+                "ConnectedPeers": {
+                    "description": "fresh sessions seen by this node, HA probe peers excluded",
+                    "type": "integer"
+                },
+                "ConsecutiveFails": {
+                    "type": "integer"
+                },
+                "IsActive": {
+                    "type": "boolean"
+                },
+                "LastHeartbeat": {
+                    "type": "string"
+                },
+                "LastProbeAt": {
+                    "type": "string"
+                },
+                "LastProbeOk": {
+                    "type": "boolean"
+                },
+                "LastProbeResult": {
+                    "type": "string"
+                },
+                "NodeId": {
+                    "type": "string"
+                },
+                "Priority": {
+                    "type": "integer"
+                },
+                "PublicIp": {
+                    "type": "string"
+                },
+                "RegisteredAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.HaStatus": {
+            "type": "object",
+            "properties": {
+                "ActiveNodeId": {
+                    "type": "string"
+                },
+                "ChangedAt": {
+                    "type": "string"
+                },
+                "ChangedBy": {
+                    "type": "string"
+                },
+                "ExitCheck": {
+                    "$ref": "#/definitions/model.HaExitCheck"
+                },
+                "JoinTokens": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.HaJoinToken"
+                    }
+                },
+                "Nodes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.HaNode"
+                    }
+                },
+                "Role": {
+                    "type": "string"
+                }
+            }
+        },
         "model.Interface": {
             "type": "object",
             "properties": {
@@ -2154,6 +2733,10 @@
                     "description": "the backend used for this interface e.g., local, mikrotik, ...",
                     "type": "string",
                     "example": "local"
+                },
+                "CreateDefaultPeer": {
+                    "description": "if true, default peers will be created for this interface",
+                    "type": "boolean"
                 },
                 "Disabled": {
                     "description": "flag that specifies if the interface is enabled (up) or not (down)",
@@ -2196,6 +2779,10 @@
                     "description": "device name, for example: wg0",
                     "type": "string",
                     "example": "wg0"
+                },
+                "IsDynamic": {
+                    "description": "specifies if the interface is a dynamic object",
+                    "type": "boolean"
                 },
                 "ListenPort": {
                     "description": "the listening port, for example: 51820",
@@ -2334,6 +2921,17 @@
                 }
             }
         },
+        "model.LogoutResponse": {
+            "type": "object",
+            "properties": {
+                "Message": {
+                    "type": "string"
+                },
+                "RedirectUrl": {
+                    "type": "string"
+                }
+            }
+        },
         "model.MultiPeerRequest": {
             "type": "object",
             "properties": {
@@ -2449,6 +3047,10 @@
                 "InterfaceIdentifier": {
                     "description": "the interface id",
                     "type": "string"
+                },
+                "IsDynamic": {
+                    "description": "specifies if the peer is dynamically created by mikrotik",
+                    "type": "boolean"
                 },
                 "Mode": {
                     "description": "the peer interface type (server, client, any)",
@@ -2598,9 +3200,134 @@
                 }
             }
         },
+        "model.RoutingActiveExitRequest": {
+            "type": "object",
+            "properties": {
+                "PeerIdentifier": {
+                    "description": "empty: no exit",
+                    "type": "string"
+                }
+            }
+        },
+        "model.RoutingExitCandidate": {
+            "type": "object",
+            "properties": {
+                "DisplayName": {
+                    "type": "string"
+                },
+                "EgressIp": {
+                    "type": "string"
+                },
+                "PeerIdentifier": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.RoutingExitCandidateRequest": {
+            "type": "object",
+            "properties": {
+                "EgressIp": {
+                    "type": "string"
+                },
+                "PeerIdentifier": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.RoutingExitInterface": {
+            "type": "object",
+            "properties": {
+                "ActivePeerIdentifier": {
+                    "description": "empty: no exit active",
+                    "type": "string"
+                },
+                "Candidates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.RoutingExitCandidate"
+                    }
+                },
+                "Detected": {
+                    "description": "Detected: peers with 0.0.0.0/0 or ::/0 that are no candidates (EgressIp empty)",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.RoutingExitCandidate"
+                    }
+                },
+                "InterfaceIdentifier": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.RoutingList": {
+            "type": "object",
+            "properties": {
+                "Content": {
+                    "description": "only in GET /routing/lists/{id}",
+                    "type": "string"
+                },
+                "Enabled": {
+                    "type": "boolean"
+                },
+                "EntryCount": {
+                    "type": "integer"
+                },
+                "Id": {
+                    "type": "string"
+                },
+                "Kind": {
+                    "description": "blackhole or bypass",
+                    "type": "string"
+                },
+                "Name": {
+                    "type": "string"
+                },
+                "UpdatedAt": {
+                    "type": "string"
+                },
+                "UpdatedBy": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.RoutingListRequest": {
+            "type": "object",
+            "properties": {
+                "Content": {
+                    "description": "omitted or null on PUT: keep the current content",
+                    "type": "string"
+                },
+                "Enabled": {
+                    "type": "boolean"
+                },
+                "Kind": {
+                    "type": "string"
+                },
+                "Name": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.RoutingSettings": {
+            "type": "object",
+            "properties": {
+                "DnsForwarderEnabled": {
+                    "type": "boolean"
+                },
+                "DnsUpstreams": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "model.SessionInfo": {
             "type": "object",
             "properties": {
+                "DefaultPasswordInUse": {
+                    "type": "boolean"
+                },
                 "IsAdmin": {
                     "type": "boolean"
                 },
@@ -2633,6 +3360,9 @@
                         "$ref": "#/definitions/model.SettingsBackendNames"
                     }
                 },
+                "CreateDefaultPeer": {
+                    "type": "boolean"
+                },
                 "EditableKeys": {
                     "type": "boolean"
                 },
@@ -2664,6 +3394,9 @@
                 },
                 "Name": {
                     "type": "string"
+                },
+                "Type": {
+                    "type": "string"
                 }
             }
         },
@@ -2684,6 +3417,9 @@
                     "items": {
                         "type": "string"
                     }
+                },
+                "DefaultPasswordInUse": {
+                    "type": "boolean"
                 },
                 "Department": {
                     "type": "string"

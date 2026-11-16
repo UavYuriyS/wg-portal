@@ -139,7 +139,10 @@ func main() {
 	if cfg.Ha.IsNode() { // only the active node writes statistics, standbys would overwrite them with zeros
 		statisticsCollector.SetActiveCheck(haManager.IsActiveNode)
 	}
-	statisticsCollector.StartBackgroundJobs(ctx)
+	// the orchestrator has no kernel state: the active node writes the statuses and Galera replicates them
+	if !cfg.Ha.IsOrchestrator() {
+		statisticsCollector.StartBackgroundJobs(ctx)
+	}
 
 	cfgFileManager, err := configfile.NewConfigFileManager(cfg, eventBus, database, database, cfgFileSystem)
 	internal.AssertNoError(err)

@@ -26,6 +26,7 @@ type StatisticsDatabaseRepo interface {
 		updateFunc func(in *domain.InterfaceStatus) (*domain.InterfaceStatus, error),
 	) error
 	DeletePeerStatus(ctx context.Context, id domain.PeerIdentifier) error
+	ReplaceHaPeerSessions(ctx context.Context, nodeId string, sessions []domain.HaPeerSession) error
 }
 
 type StatisticsMetricsServer interface {
@@ -62,7 +63,7 @@ type StatisticsCollector struct {
 	isActive func() bool // HA: only the active node collects, so standbys do not overwrite its data
 }
 
-// SetActiveCheck makes all collection loops skip their ticks while check returns false.
+// SetActiveCheck makes the collection loops skip their DB writes while check returns false (HA sessions excepted).
 func (c *StatisticsCollector) SetActiveCheck(check func() bool) {
 	c.isActive = check
 }
@@ -188,15 +189,15 @@ func (c *StatisticsCollector) collectPeerData(ctx context.Context) {
 		case <-ctx.Done():
 			return // program stopped
 		case <-ticker.C:
-			if !c.active() {
-				continue
-			}
+			// HA: every node reads its kernel and records its sessions, only the active one writes peer_statuses
+			active := c.active()
 			interfaces, err := c.db.GetAllInterfaces(ctx)
 			if err != nil {
 				slog.Warn("failed to fetch all interfaces for peer data collection", "error", err)
 				continue
 			}
 
+			var sessions []domain.HaPeerSession
 			for _, in := range interfaces {
 				peers, err := c.wg.GetController(in).GetPeers(ctx, in.Identifier)
 				if err != nil {
@@ -204,6 +205,19 @@ func (c *StatisticsCollector) collectPeerData(ctx context.Context) {
 					continue
 				}
 				now := time.Now()
+				for _, peer := range peers {
+					if c.cfg.Ha.IsNode() && now.Sub(peer.LastHandshake) <= c.cfg.Backend.ReKeyTimeoutInterval {
+						hs := peer.LastHandshake
+						sessions = append(sessions, domain.HaPeerSession{NodeId: c.cfg.Ha.NodeId,
+							PeerIdentifier: peer.Identifier, LastHandshake: &hs, Endpoint: peer.Endpoint,
+							BytesReceived: peer.BytesUpload, BytesTransmitted: peer.BytesDownload, UpdatedAt: now})
+					}
+				}
+				// shortcut: peer_statuses, Prometheus and v1 metrics only show the active node, no per-node interface
+				// traffic either; extend HaPeerSession if per-node metrics are ever needed
+				if !active {
+					continue
+				}
 				for _, peer := range peers {
 					var connectionStateChanged bool
 					var newPeerStatus domain.PeerStatus
@@ -263,6 +277,12 @@ func (c *StatisticsCollector) collectPeerData(ctx context.Context) {
 						// publish event if connection state changed
 						c.bus.Publish(app.TopicPeerStateChanged, newPeerStatus, *peerModel)
 					}
+				}
+			}
+
+			if c.cfg.Ha.IsNode() {
+				if err := c.db.ReplaceHaPeerSessions(ctx, c.cfg.Ha.NodeId, sessions); err != nil {
+					slog.Warn("failed to save ha peer sessions", "error", err)
 				}
 			}
 		}
@@ -434,6 +454,9 @@ func (c *StatisticsCollector) isPeerPingable(
 	stats, err := c.wg.GetControllerByName(backend).PingAddresses(ctx, checkAddr)
 	if err != nil {
 		slog.Debug("failed to ping peer", "peer", peer.Identifier, "error", err)
+		return false
+	}
+	if stats == nil { // controllers without kernel state (DbOnlyController) return nil, nil
 		return false
 	}
 

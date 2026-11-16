@@ -264,3 +264,46 @@ func toStr(v any) string {
 	s, _ := v.(string)
 	return s
 }
+
+func TestGetStatus_ConnectedPeers(t *testing.T) {
+	m, repo, cfg := newTestManager(t)
+	ctx := domain.SetUserInfo(context.Background(), domain.SystemAdminContextUserInfo())
+	cfg.Statistics.DataCollectionInterval = time.Minute
+	cfg.Backend.ReKeyTimeoutInterval = 3 * time.Minute
+	now := time.Now()
+	old := now.Add(-time.Hour)
+	if err := repo.SaveHaProbePeer(ctx, &domain.HaProbePeer{InterfaceIdentifier: "wg0", PeerIdentifier: "probe",
+		ExitPeerIdentifier: "exit-probe"}); err != nil {
+		t.Fatal(err)
+	}
+	for node, peers := range map[string][]domain.PeerIdentifier{"a": {"p1", "probe", "exit-probe"}, "b": {"p2"}} {
+		var sessions []domain.HaPeerSession
+		for _, p := range peers {
+			sessions = append(sessions, domain.HaPeerSession{NodeId: node, PeerIdentifier: p, LastHandshake: &now,
+				UpdatedAt: now})
+		}
+		if err := repo.ReplaceHaPeerSessions(ctx, node, sessions); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// node c stopped reporting
+	if err := repo.ReplaceHaPeerSessions(ctx, "c", []domain.HaPeerSession{
+		{NodeId: "c", PeerIdentifier: "p3", LastHandshake: &old, UpdatedAt: old}}); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := m.GetStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ConnectedPeers["a"] != 1 || s.ConnectedPeers["b"] != 1 || s.ConnectedPeers["c"] != 0 {
+		t.Fatalf("unexpected connected peers %v", s.ConnectedPeers)
+	}
+
+	if err := m.RemoveNode(ctx, "b"); err != nil {
+		t.Fatal(err)
+	}
+	if left, _ := repo.GetHaPeerSessions(ctx, "b"); len(left) != 0 {
+		t.Fatalf("sessions of the removed node must be deleted, got %v", left)
+	}
+}
